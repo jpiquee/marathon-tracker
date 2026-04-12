@@ -243,14 +243,18 @@ def mode_reply():
 
     for update in updates:
         uid = update.get("update_id", 0)
-        cid = str(update.get("message", {}).get("chat", {}).get("id", ""))
+        message = update.get("message", {})
+        cid = str(message.get("chat", {}).get("id", ""))
+        text = message.get("text", "").strip()
 
         if cid != TELEGRAM_CHAT_ID:
             save_file(LAST_UPDATE_FILE, uid)
             continue
 
-        msg = build_full_message()
-        send_telegram(msg)
+        if text.startswith("/status"):
+            msg = build_full_message()
+            send_telegram(msg)
+
         save_file(LAST_UPDATE_FILE, uid)
 
     print("OK " + str(len(updates)) + " msg")

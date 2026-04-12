@@ -127,29 +127,22 @@ def compute_estimated_arrival(elapsed_sec_at_split, dist_km):
     return arrival.strftime("%Hh%M")
 
 
-def ai_analysis(splits_for_ai):
+def ai_analysis(context):
     if not ANTHROPIC_API_KEY:
         return None
     try:
-        paris_tz = timezone(timedelta(hours=2))
-        now = datetime.now(paris_tz)
-        now_str = now.strftime("%Hh%M")
-        race_start = now.replace(hour=8, minute=40, second=0, microsecond=0)
-        elapsed_total = now - race_start
-        elapsed_str = str(int(elapsed_total.total_seconds() // 3600)) + "h" + str(int((elapsed_total.total_seconds() % 3600) // 60)).zfill(2)
-
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
         prompt = (
-            "Coach marathon expert. Marathon de Paris 2026, depart 8h40. "
-            "Il est actuellement " + now_str + " a Paris (temps ecoule depuis le depart : " + elapsed_str + "). "
-            "IMPORTANT : les champs 'temps_ecoule' dans les splits sont des durees depuis le depart de la course (pas des heures d horloge). "
-            "Splits de Pomme : " + json.dumps(splits_for_ai, ensure_ascii=False) + " "
-            "En francais, max 300 car, emojis : analyse la tendance d allure, "
-            "estime le temps final et l heure d arrivee (heure d horloge a Paris). "
+            "Coach marathon expert. "
+            "Voici la situation ACTUELLE de Pomme au Marathon de Paris 2026 : "
+            + json.dumps(context, ensure_ascii=False) + " "
+            "En francais, max 300 car, emojis : "
+            "analyse la tendance d allure (reguliere/ralentissement/acceleration), "
+            "estime le temps final et l heure d arrivee a Paris. "
             "Si elle a fini, felicite avec son temps."
         )
         body = {
@@ -225,24 +218,42 @@ def build_full_message():
 
     message = build_runner_status(runner["name"], splits)
 
-    splits_for_ai = None
     if splits:
-        splits_for_ai = []
-        for s in splits:
-            p = s.get("point", "")
-            t = s.get("time", "")
-            pace = s.get("kmPace", "")
-            pace_avg = s.get("kmPaceAvg", "")
-            if p and t:
-                splits_for_ai.append({
-                    "point": p,
-                    "temps_ecoule": t.split(".")[0],
-                    "allure_km": pace,
-                    "allure_moy": pace_avg,
-                })
+        last = splits[-1]
+        elapsed_sec = parse_time_to_seconds(last.get("time", "0"))
+        dist_km = get_dist_from_point(last.get("point", ""))
 
-    if splits_for_ai:
-        analysis = ai_analysis(splits_for_ai)
+        # Position actuelle estimee par Python
+        paris_tz = timezone(timedelta(hours=2))
+        now = datetime.now(paris_tz)
+        race_start = now.replace(hour=8, minute=40, second=0, microsecond=0)
+        current_elapsed_sec = max(0, (now - race_start).total_seconds())
+        avg_pace_sec = elapsed_sec / dist_km if dist_km > 0 else 0
+        time_since_split = max(0, current_elapsed_sec - elapsed_sec)
+        dist_now = min(dist_km + (time_since_split / avg_pace_sec if avg_pace_sec > 0 else 0), MARATHON_DIST)
+        remaining_now = max(0, MARATHON_DIST - dist_now)
+        finished = dist_now >= MARATHON_DIST
+
+        # Tendance allure sur les splits (sans temps ecoule pour eviter confusion IA)
+        pace_trend = []
+        for s in splits:
+            p = s.get("kmPace", "")
+            if p and p != "N/A":
+                pace_trend.append({"point": s.get("point", ""), "allure": p})
+
+        context = {
+            "heure_paris_maintenant": now.strftime("%Hh%M"),
+            "position_actuelle_km": round(dist_now, 1),
+            "km_restants": round(remaining_now, 1),
+            "allure_moyenne_globale": last.get("kmPaceAvg", "N/A"),
+            "allure_dernier_segment": last.get("kmPace", "N/A"),
+            "tendance_allures_par_segment": pace_trend,
+            "finie": finished,
+        }
+        if finished:
+            context["temps_final"] = last.get("time", "").split(".")[0]
+
+        analysis = ai_analysis(context)
         if analysis:
             message += "\n\nAnalyse IA :\n" + analysis
 

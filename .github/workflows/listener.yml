@@ -1,0 +1,46 @@
+name: Telegram Listener
+
+on:
+  schedule:
+    - cron: '5 * * * *'  # toutes les heures (fiable), décalé de 5 min pour ne pas chevaucher
+  workflow_dispatch:
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Restore state
+        uses: actions/cache@v4
+        with:
+          path: last_update_id.txt
+          key: listener-state-${{ github.run_id }}
+          restore-keys: |
+            listener-state-
+            marathon-state-
+
+      - name: Listen for /status commands (55 min)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python tracker.py listen 3300
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: last_update_id.txt
+          key: listener-state-${{ github.run_id }}

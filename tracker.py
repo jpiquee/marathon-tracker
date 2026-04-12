@@ -2,6 +2,7 @@ import requests
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -260,9 +261,55 @@ def mode_reply():
     print("OK " + str(len(updates)) + " msg")
 
 
+def mode_listen(duration_sec=3300):
+    print("=== LISTEN " + str(duration_sec) + "s ===")
+    lu = get_file(LAST_UPDATE_FILE)
+    last_update_id = int(lu) if lu else 0
+    end_time = time.time() + duration_sec
+
+    while time.time() < end_time:
+        remaining = int(end_time - time.time())
+        poll_timeout = min(25, remaining)
+        if poll_timeout <= 0:
+            break
+        try:
+            url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/getUpdates"
+            r = requests.get(
+                url,
+                params={"offset": last_update_id + 1, "timeout": poll_timeout},
+                timeout=poll_timeout + 5
+            )
+            updates = r.json().get("result", [])
+        except Exception as e:
+            print("Erreur polling: " + str(e))
+            time.sleep(5)
+            continue
+
+        for update in updates:
+            uid = update.get("update_id", 0)
+            message = update.get("message", {})
+            cid = str(message.get("chat", {}).get("id", ""))
+            text = message.get("text", "").strip()
+            last_update_id = uid
+            save_file(LAST_UPDATE_FILE, uid)
+
+            if cid != TELEGRAM_CHAT_ID:
+                continue
+
+            if text.startswith("/status"):
+                print("/status recu, envoi en cours...")
+                msg = build_full_message()
+                send_telegram(msg)
+
+    print("Listen termine")
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "auto"
     if mode == "reply":
         mode_reply()
+    elif mode == "listen":
+        duration = int(sys.argv[2]) if len(sys.argv) > 2 else 3300
+        mode_listen(duration)
     else:
         mode_auto()

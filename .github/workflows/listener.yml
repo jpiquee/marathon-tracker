@@ -2,7 +2,7 @@ name: Telegram Listener
 
 on:
   schedule:
-    - cron: '5 * * * *'  # toutes les heures (fiable), décalé de 5 min pour ne pas chevaucher
+    - cron: '5 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -29,14 +29,13 @@ jobs:
           key: listener-state-${{ github.run_id }}
           restore-keys: |
             listener-state-
-            marathon-state-
 
-      - name: Listen for /status commands (55 min)
+      - name: Listen for commands (55 min)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python tracker.py listen 3300
+        run: python tracker.py 3300
 
       - name: Save state
         if: always()

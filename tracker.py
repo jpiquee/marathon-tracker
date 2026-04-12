@@ -104,7 +104,30 @@ def fetch_splits(pid):
         return None
 
 
-def ai_analysis(runner_data):
+def compute_estimated_arrival(elapsed_sec_at_split, dist_km):
+    """Calcule l'heure d'arrivee estimee depuis l'heure actuelle (pas depuis le split)."""
+    if dist_km <= 0 or elapsed_sec_at_split <= 0:
+        return None
+    paris_tz = timezone(timedelta(hours=2))
+    now = datetime.now(paris_tz)
+    race_start = now.replace(hour=8, minute=40, second=0, microsecond=0)
+    current_elapsed_sec = (now - race_start).total_seconds()
+    if current_elapsed_sec <= 0:
+        return None
+
+    avg_pace_sec = elapsed_sec_at_split / dist_km  # sec/km a l'allure moyenne du split
+
+    # Position estimee maintenant (on extrapole depuis le dernier split)
+    time_since_split = max(0, current_elapsed_sec - elapsed_sec_at_split)
+    estimated_dist_now = min(dist_km + time_since_split / avg_pace_sec, MARATHON_DIST)
+
+    remaining_km = max(0, MARATHON_DIST - estimated_dist_now)
+    remaining_sec = remaining_km * avg_pace_sec
+    arrival = now + timedelta(seconds=remaining_sec)
+    return arrival.strftime("%Hh%M")
+
+
+def ai_analysis(runner_data, estimated_arrival):
     if not ANTHROPIC_API_KEY:
         return None
     try:
@@ -116,12 +139,16 @@ def ai_analysis(runner_data):
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
+
+        arrival_str = ("arrivee estimee : " + estimated_arrival) if estimated_arrival else "pas encore de donnees suffisantes"
+
         prompt = (
             "Coach marathon. Marathon de Paris 2026, depart 8h40, "
-            "il est maintenant " + now_paris + " heure de Paris. "
-            "Donnees Pomme : " + json.dumps(runner_data) + " "
-            "Reponds en francais, tres court (max 300 car), emojis : "
-            "allure reguliere ou non, temps final prevu, heure arrivee estimee. "
+            "il est " + now_paris + " a Paris. "
+            "Calcul Python : " + arrival_str + ". "
+            "Splits Pomme : " + json.dumps(runner_data) + " "
+            "En francais, tres court (max 280 car), emojis : "
+            "allure reguliere ou non, temps final prevu, et confirme l heure d arrivee calculee. "
             "Si elle a fini, felicite avec son temps."
         )
         body = {
@@ -198,7 +225,13 @@ def build_full_message():
     message = build_runner_status(runner["name"], splits)
 
     runner_data = None
+    estimated_arrival = None
     if splits:
+        last = splits[-1]
+        elapsed_sec = parse_time_to_seconds(last.get("time", "0"))
+        dist_km = get_dist_from_point(last.get("point", ""))
+        estimated_arrival = compute_estimated_arrival(elapsed_sec, dist_km)
+
         summary = []
         for s in splits:
             summary.append({
@@ -206,12 +239,11 @@ def build_full_message():
                 "time": s.get("time", ""),
                 "pace": s.get("kmPace", ""),
                 "paceAvg": s.get("kmPaceAvg", ""),
-                "etfp": s.get("etfp", "")
             })
         runner_data = {"name": runner["name"], "splits": summary}
 
     if runner_data:
-        analysis = ai_analysis(runner_data)
+        analysis = ai_analysis(runner_data, estimated_arrival)
         if analysis:
             message += "\n\nAnalyse IA :\n" + analysis
 

@@ -34,19 +34,27 @@ def save_file(name, value):
         f.write(str(value))
 
 
-HUMOR_STYLES = [
-    "une blague absurde à chute inattendue",
-    "une anecdote hilarante sur un animal",
-    "un quiproquo comique entre deux personnes",
-    "une histoire de malchance enchaînée façon domino",
-    "une blague noire avec une fin surprenante",
-    "une histoire surréaliste et loufoque",
-    "une blague d'humour anglais (pince-sans-rire, ironie)",
-    "une anecdote embarrassante mais drôle du quotidien",
-    "une histoire avec une chute en jeu de mots",
-    "un sketch comique façon Monty Python",
-    "une histoire absurde inspirée des meilleures blagues scandinaves",
-    "une blague de science ou de logique avec une chute inattendue",
+SCENARIOS = [
+    ("un médecin urgentiste", "une salle d'attente bondée un lundi matin"),
+    ("un plombier", "chez un client millionnaire à Monaco"),
+    ("un chef étoilé", "dans un fast-food McDo"),
+    ("un astronaute", "bloqué dans l'ISS avec une imprimante en panne"),
+    ("un agent immobilier", "qui vend un appartement hanté"),
+    ("un dentiste", "qui a peur du sang"),
+    ("un professeur de yoga", "dans un embouteillage"),
+    ("un pirate informatique", "qui appelle le support technique"),
+    ("un détective privé", "qui enquête sur un chat disparu"),
+    ("un magicien raté", "à un anniversaire d'enfants"),
+    ("un traducteur simultané", "lors d'un discours politique incohérent"),
+    ("un coach sportif", "qui déteste le sport"),
+    ("un pilote d'avion", "qui a le vertige"),
+    ("un sommelier", "dans un restaurant qui ne sert que de l'eau"),
+    ("un taxidermiste", "invité à un mariage"),
+    ("un juge", "au tribunal des petites créances pour un litige de 3€"),
+    ("un gardien de zoo", "le jour où tous les animaux s'échappent"),
+    ("un DJ", "à une soirée de retraités"),
+    ("un notaire très sérieux", "qui lit un testament complètement absurde"),
+    ("un pompier", "appelé pour un chat coincé... sur une fusée"),
 ]
 
 
@@ -54,18 +62,16 @@ def ai_funny_story():
     if not ANTHROPIC_API_KEY:
         return "Clé API manquante pour générer une histoire."
     try:
-        style = random.choice(HUMOR_STYLES)
-        seed = random.randint(1, 99999)
+        personnage, contexte = random.choice(SCENARIOS)
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
         prompt = (
-            f"Tu es un humoriste de niveau mondial. Raconte-moi {style}. "
-            f"Elle doit être vraiment drôle, avec une chute qui surprend. "
-            f"En français, max 300 caractères, avec emojis. "
-            f"(variante #{seed})"
+            f"Écris une micro-histoire drôle en français avec {personnage} {contexte}. "
+            f"La chute doit être inattendue et hilarante. "
+            f"Max 300 caractères, emojis bienvenus. Pas d'animaux polaires."
         )
         body = {
             "model": "claude-sonnet-4-20250514",

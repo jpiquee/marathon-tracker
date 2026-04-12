@@ -34,27 +34,21 @@ def save_file(name, value):
         f.write(str(value))
 
 
-SCENARIOS = [
-    ("un médecin urgentiste", "une salle d'attente bondée un lundi matin"),
-    ("un plombier", "chez un client millionnaire à Monaco"),
-    ("un chef étoilé", "dans un fast-food McDo"),
-    ("un astronaute", "bloqué dans l'ISS avec une imprimante en panne"),
-    ("un agent immobilier", "qui vend un appartement hanté"),
-    ("un dentiste", "qui a peur du sang"),
-    ("un professeur de yoga", "dans un embouteillage"),
-    ("un pirate informatique", "qui appelle le support technique"),
-    ("un détective privé", "qui enquête sur un chat disparu"),
-    ("un magicien raté", "à un anniversaire d'enfants"),
-    ("un traducteur simultané", "lors d'un discours politique incohérent"),
-    ("un coach sportif", "qui déteste le sport"),
-    ("un pilote d'avion", "qui a le vertige"),
-    ("un sommelier", "dans un restaurant qui ne sert que de l'eau"),
-    ("un taxidermiste", "invité à un mariage"),
-    ("un juge", "au tribunal des petites créances pour un litige de 3€"),
-    ("un gardien de zoo", "le jour où tous les animaux s'échappent"),
-    ("un DJ", "à une soirée de retraités"),
-    ("un notaire très sérieux", "qui lit un testament complètement absurde"),
-    ("un pompier", "appelé pour un chat coincé... sur une fusée"),
+COMEDY_STYLES = [
+    ("Pierre Desproges", "humour noir, absurde, phrases ciselées, chute brillante"),
+    ("Raymond Devos", "jeu de mots génial, logique qui déraille, absurde poétique"),
+    ("Coluche", "humour populaire irrévérencieux, blague qui dénonce, ton cash"),
+    ("George Carlin", "observation cynique et brillante de la société, chute acide"),
+    ("Jerry Seinfeld", "observation du quotidien, 'what's the deal with...', chute légère"),
+    ("Louis CK", "autodérision sombre et radicale, vérité crue qui fait rire jaune"),
+    ("Ricky Gervais", "ironie mordante, malaise comique, chute qui met mal à l'aise"),
+    ("les Monty Python", "absurde britannique pur, logique qui part en vrille complètement"),
+    ("un humoriste juif new-yorkais", "autodérision, névrose, chute inattendue sur la vie"),
+    ("Gad Elmaleh", "observation fine du quotidien, anecdote qui dérape, chute tendre"),
+    ("Michel Boujenah", "anecdote familiale chaotique, personnages hauts en couleur"),
+    ("Pierre Richard dans un de ses films", "cascade de malchances, quiproquo absurde"),
+    ("Desproges au tribunal des flagrants délires", "réquisitoire hilarant, logique implacable"),
+    ("un stand-up américain des années 90", "blague de bar adulte, chute en deux temps"),
 ]
 
 
@@ -62,20 +56,22 @@ def ai_funny_story():
     if not ANTHROPIC_API_KEY:
         return "Clé API manquante pour générer une histoire."
     try:
-        personnage, contexte = random.choice(SCENARIOS)
+        humoriste, style = random.choice(COMEDY_STYLES)
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
         prompt = (
-            f"Écris une micro-histoire drôle en français avec {personnage} {contexte}. "
-            f"La chute doit être inattendue et hilarante. "
-            f"Max 300 caractères, emojis bienvenus. Pas d'animaux polaires."
+            f"Tu es {humoriste}. Raconte une de tes meilleures histoires drôles, "
+            f"dans ton style : {style}. "
+            f"Public adulte, humour fin ou osé mais pas vulgaire. "
+            f"En français. La chute doit être forte et inattendue. "
+            f"Maximum 600 caractères."
         )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 350,
+            "max_tokens": 600,
             "temperature": 1,
             "messages": [{"role": "user", "content": prompt}]
         }

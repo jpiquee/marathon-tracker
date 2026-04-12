@@ -127,10 +127,13 @@ def compute_estimated_arrival(elapsed_sec_at_split, dist_km):
     return arrival.strftime("%Hh%M")
 
 
-def ai_analysis(pace_trend, allure_moy, allure_dernier, finished, temps_final=None):
+def ai_analysis(pace_trend, allure_moy, allure_dernier, finished, temps_final=None, km_restants=0, estimated_arrival=None):
     if not ANTHROPIC_API_KEY:
         return None
     try:
+        paris_tz = timezone(timedelta(hours=2))
+        now_paris = datetime.now(paris_tz).strftime("%Hh%M")
+
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
@@ -144,16 +147,18 @@ def ai_analysis(pace_trend, allure_moy, allure_dernier, finished, temps_final=No
         else:
             trend_str = ", ".join(s["point"] + " " + s["allure"] + "/km" for s in pace_trend[-8:])
             prompt = (
-                "Coach marathon. Pomme court le Marathon de Paris 2026. "
-                "Allure moy : " + allure_moy + "/km. Dernier segment : " + allure_dernier + "/km. "
-                "Tendance : " + trend_str + ". "
-                "En francais, max 200 car, emojis : analyse uniquement la tendance d allure "
-                "(reguliere/acceleration/ralentissement) et un mot d encouragement. "
-                "Ne calcule pas et ne mentionne pas d heure d arrivee."
+                "Coach marathon. Il est " + now_paris + " a Paris. "
+                "Pomme court le Marathon de Paris 2026. "
+                "Il lui reste " + str(round(km_restants, 1)) + " km. "
+                "Son allure recente : " + allure_dernier + "/km. Allure moy globale : " + allure_moy + "/km. "
+                "Tendance par segment : " + trend_str + ". "
+                "En francais, max 250 car, emojis : analyse la tendance d allure, "
+                "puis estime l heure d arrivee a Paris en partant de maintenant (" + now_paris + ") "
+                "et du km restant a l allure recente. Donne un mot d encouragement."
             )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 200,
+            "max_tokens": 250,
             "messages": [{"role": "user", "content": prompt}]
         }
         r = requests.post(
@@ -231,12 +236,24 @@ def build_full_message():
             if p and p != "N/A":
                 pace_trend.append({"point": s.get("point", ""), "allure": p})
 
+        # Position actuelle extrapolee par Python
+        paris_tz = timezone(timedelta(hours=2))
+        now = datetime.now(paris_tz)
+        race_start = now.replace(hour=8, minute=40, second=0, microsecond=0)
+        elapsed_sec = parse_time_to_seconds(last.get("time", "0"))
+        current_elapsed = max(0, (now - race_start).total_seconds())
+        avg_pace_sec = elapsed_sec / dist_km if dist_km > 0 else 0
+        time_since_split = max(0, current_elapsed - elapsed_sec)
+        dist_now = min(dist_km + (time_since_split / avg_pace_sec if avg_pace_sec > 0 else 0), MARATHON_DIST)
+        km_restants_now = max(0, MARATHON_DIST - dist_now)
+
         analysis = ai_analysis(
             pace_trend=pace_trend,
             allure_moy=last.get("kmPaceAvg", "N/A"),
             allure_dernier=last.get("kmPace", "N/A"),
             finished=finished,
             temps_final=last.get("time", "").split(".")[0] if finished else None,
+            km_restants=km_restants_now,
         )
         if analysis:
             message += "\n\nAnalyse IA :\n" + analysis

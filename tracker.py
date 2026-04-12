@@ -8,8 +8,6 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 EVENT_ID = "ASO-PARISMARATHON-2026"
-TARGET_PACE_SEC = 341
-TARGET_TIME_SEC = 14400
 MARATHON_DIST = 42.195
 
 RTRT_APPID = "6163132b93ded769986f738b"
@@ -17,7 +15,6 @@ RTRT_TOKEN = "54EA6988C9EF05F8061A"
 LAST_UPDATE_FILE = "last_update_id.txt"
 
 RUNNERS = [
-    {"name": "Renaud", "pid": "RN4LKWXU"},
     {"name": "Pomme", "pid": "R5N9G28S"},
 ]
 
@@ -105,7 +102,7 @@ def fetch_splits(pid):
         return None
 
 
-def ai_analysis(all_runners_data):
+def ai_analysis(runner_data):
     if not ANTHROPIC_API_KEY:
         return None
     try:
@@ -116,13 +113,14 @@ def ai_analysis(all_runners_data):
         }
         prompt = (
             "Tu es un coach de marathon expert et enthousiaste. "
-            "Voici les donnees EN COURS de coureurs au Marathon de Paris 2026. "
-            "Objectif pour chacun : sub 4h (allure cible 5:41/km). Marathon = 42.195 km. "
-            "Donnees : " + json.dumps(all_runners_data) + " "
-            "Analyse en francais pour chaque coureur : "
-            "estimation temps arrivee (tiens compte de la tendance d allure), "
-            "est-il en bonne voie pour sub 4h, un petit mot d encouragement. "
-            "Si un coureur a fini, felicite-le. "
+            "Voici les donnees EN COURS de Pomme au Marathon de Paris 2026. "
+            "Marathon = 42.195 km. "
+            "Donnees : " + json.dumps(runner_data) + " "
+            "Analyse en francais : "
+            "1) Analyse de sa course (evolution de l allure, points forts/faibles), "
+            "2) Prediction de son temps final en tenant compte de la tendance d allure, "
+            "3) Heure d arrivee estimee (la course demarre vers 8h40). "
+            "Si elle a fini, felicite-la avec son temps final. "
             "Emojis. Max 600 caracteres total."
         )
         body = {
@@ -156,14 +154,6 @@ def build_runner_status(runner_name, splits):
     dist_km = get_dist_from_point(point)
     remaining_km = max(0, MARATHON_DIST - dist_km)
 
-    target_at_dist = dist_km * TARGET_PACE_SEC
-    diff_sec = elapsed_sec - target_at_dist
-
-    if diff_sec > 0:
-        diff_line = "Retard : +" + format_time(abs(diff_sec))
-    else:
-        diff_line = "Avance : -" + format_time(abs(diff_sec))
-
     est_finish = ""
     if etfp:
         parts = etfp.split("~")
@@ -178,8 +168,6 @@ def build_runner_status(runner_name, splits):
 
     if finished:
         header = "ARRIVEE " + runner_name + " !!!"
-        if elapsed_sec < TARGET_TIME_SEC:
-            header += " SUB 4H !!!"
     else:
         header = runner_name + " - " + label
 
@@ -191,53 +179,40 @@ def build_runner_status(runner_name, splits):
         "Duree : " + time_str.split(".")[0],
         "Allure segment : " + pace + " /km",
         "Allure moy : " + pace_avg + " /km",
-        diff_line,
     ]
 
     if not finished and est_finish:
         lines.append("Estimation arrivee : " + est_finish)
 
-    if diff_sec > 120 and not finished:
-        lines.append("ALERTE RETARD " + str(int(diff_sec / 60)) + " min !")
-
     return "\n".join(lines)
 
 
 def build_full_message():
-    all_runners_data = []
-    sections = []
+    runner = RUNNERS[0]
+    splits = fetch_splits(runner["pid"])
 
-    for runner in RUNNERS:
-        splits = fetch_splits(runner["pid"])
-        if splits is None:
-            sections.append(runner["name"] + " : erreur API")
-            continue
+    if splits is None:
+        return runner["name"] + " : erreur API"
 
-        status = build_runner_status(runner["name"], splits)
-        sections.append(status)
+    message = build_runner_status(runner["name"], splits)
 
-        if splits:
-            summary = []
-            for s in splits:
-                summary.append({
-                    "point": s.get("point", ""),
-                    "time": s.get("time", ""),
-                    "pace": s.get("kmPace", ""),
-                    "paceAvg": s.get("kmPaceAvg", ""),
-                    "etfp": s.get("etfp", "")
-                })
-            all_runners_data.append({
-                "name": runner["name"],
-                "splits": summary
+    runner_data = None
+    if splits:
+        summary = []
+        for s in splits:
+            summary.append({
+                "point": s.get("point", ""),
+                "time": s.get("time", ""),
+                "pace": s.get("kmPace", ""),
+                "paceAvg": s.get("kmPaceAvg", ""),
+                "etfp": s.get("etfp", "")
             })
+        runner_data = {"name": runner["name"], "splits": summary}
 
-    separator = "\n" + "---" + "\n"
-    message = separator.join(sections)
-    message += "\n(Objectif : sub 4h00)"
-
-    analysis = ai_analysis(all_runners_data)
-    if analysis:
-        message += "\n\nAnalyse IA :\n" + analysis
+    if runner_data:
+        analysis = ai_analysis(runner_data)
+        if analysis:
+            message += "\n\nAnalyse IA :\n" + analysis
 
     return message
 

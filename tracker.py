@@ -2,6 +2,7 @@ import requests
 import json
 import os
 import sys
+from datetime import datetime, timezone, timedelta
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -106,26 +107,25 @@ def ai_analysis(runner_data):
     if not ANTHROPIC_API_KEY:
         return None
     try:
+        paris_tz = timezone(timedelta(hours=2))
+        now_paris = datetime.now(paris_tz).strftime("%Hh%M")
+
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
         prompt = (
-            "Tu es un coach de marathon expert et enthousiaste. "
-            "Voici les donnees EN COURS de Pomme au Marathon de Paris 2026. "
-            "Marathon = 42.195 km. "
-            "Donnees : " + json.dumps(runner_data) + " "
-            "Analyse en francais : "
-            "1) Analyse de sa course (evolution de l allure, points forts/faibles), "
-            "2) Prediction de son temps final en tenant compte de la tendance d allure, "
-            "3) Heure d arrivee estimee (la course demarre vers 8h40). "
-            "Si elle a fini, felicite-la avec son temps final. "
-            "Emojis. Max 600 caracteres total."
+            "Coach marathon. Marathon de Paris 2026, depart 8h40, "
+            "il est maintenant " + now_paris + " heure de Paris. "
+            "Donnees Pomme : " + json.dumps(runner_data) + " "
+            "Reponds en francais, tres court (max 300 car), emojis : "
+            "allure reguliere ou non, temps final prevu, heure arrivee estimee. "
+            "Si elle a fini, felicite avec son temps."
         )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 500,
+            "max_tokens": 250,
             "messages": [{"role": "user", "content": prompt}]
         }
         r = requests.post(

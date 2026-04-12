@@ -8,16 +8,18 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 EVENT_ID = "ASO-PARISMARATHON-2026"
-PROFILE_ID = "RN4LKWXU"
 TARGET_PACE_SEC = 341
 TARGET_TIME_SEC = 14400
 MARATHON_DIST = 42.195
 
-API_URL = "https://api.rtrt.me/events/" + EVENT_ID + "/profiles/" + PROFILE_ID + "/splits"
 RTRT_APPID = "6163132b93ded769986f738b"
 RTRT_TOKEN = "54EA6988C9EF05F8061A"
-LAST_SPLIT_FILE = "last_split_count.txt"
 LAST_UPDATE_FILE = "last_update_id.txt"
+
+RUNNERS = [
+    {"name": "Renaud", "pid": "RN4LKWXU"},
+    {"name": "Pomme", "pid": "R5N9G28S"},
+]
 
 DIST_MAP = {
     "START": 0, "5KM": 5, "10KM": 10, "15KM": 15,
@@ -72,30 +74,6 @@ def parse_time_to_seconds(time_str):
     return 0
 
 
-def fetch_splits():
-    try:
-        payload = {
-            "appid": RTRT_APPID,
-            "token": RTRT_TOKEN,
-            "max": "2000",
-            "loc": "1",
-            "pidversion": "1",
-            "etimes": "1",
-            "units": "metric",
-            "source": "webtracker"
-        }
-        r = requests.post(API_URL, data=payload, timeout=15)
-        data = r.json()
-        print("API status: " + str(r.status_code))
-        splits = data.get("list", [])
-        if not splits:
-            print("Reponse: " + r.text[:500])
-        return splits
-    except Exception as e:
-        print("Erreur API: " + str(e))
-        return None
-
-
 def get_dist_from_point(point_name):
     if point_name in DIST_MAP:
         return DIST_MAP[point_name]
@@ -106,7 +84,28 @@ def get_dist_from_point(point_name):
         return 0
 
 
-def ai_analysis(splits_data, is_final):
+def fetch_splits(pid):
+    try:
+        url = "https://api.rtrt.me/events/" + EVENT_ID + "/profiles/" + pid + "/splits"
+        payload = {
+            "appid": RTRT_APPID,
+            "token": RTRT_TOKEN,
+            "max": "2000",
+            "loc": "1",
+            "pidversion": "1",
+            "etimes": "1",
+            "units": "metric",
+            "source": "webtracker"
+        }
+        r = requests.post(url, data=payload, timeout=15)
+        data = r.json()
+        return data.get("list", [])
+    except Exception as e:
+        print("Erreur API: " + str(e))
+        return None
+
+
+def ai_analysis(all_runners_data):
     if not ANTHROPIC_API_KEY:
         return None
     try:
@@ -115,28 +114,20 @@ def ai_analysis(splits_data, is_final):
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
-        if is_final:
-            prompt = (
-                "Tu es un commentateur de marathon enthousiaste. "
-                "Voici les donnees COMPLETES de Renaud Carbonnier au Marathon de Paris 2026. "
-                "Objectif : sub 4h (allure cible 5:41/km). "
-                "Splits : " + json.dumps(splits_data) + " "
-                "Resume final en francais : objectif atteint ou non, gestion de course, "
-                "felicitations. Utilise des emojis. Max 500 caracteres."
-            )
-        else:
-            prompt = (
-                "Tu es un coach de marathon expert. "
-                "Voici les donnees EN COURS de Renaud Carbonnier au Marathon de Paris 2026. "
-                "Objectif : sub 4h (allure cible 5:41/km). Marathon = 42.195 km. "
-                "Splits : " + json.dumps(splits_data) + " "
-                "Analyse en francais : estimation temps arrivee (tiens compte de la tendance "
-                "d allure, accelere-t-il ou ralentit-il), est-il en bonne voie pour sub 4h, "
-                "conseil. Emojis. Max 400 caracteres."
-            )
+        prompt = (
+            "Tu es un coach de marathon expert et enthousiaste. "
+            "Voici les donnees EN COURS de coureurs au Marathon de Paris 2026. "
+            "Objectif pour chacun : sub 4h (allure cible 5:41/km). Marathon = 42.195 km. "
+            "Donnees : " + json.dumps(all_runners_data) + " "
+            "Analyse en francais pour chaque coureur : "
+            "estimation temps arrivee (tiens compte de la tendance d allure), "
+            "est-il en bonne voie pour sub 4h, un petit mot d encouragement. "
+            "Si un coureur a fini, felicite-le. "
+            "Emojis. Max 600 caracteres total."
+        )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 400,
+            "max_tokens": 500,
             "messages": [{"role": "user", "content": prompt}]
         }
         r = requests.post(
@@ -149,9 +140,9 @@ def ai_analysis(splits_data, is_final):
         return None
 
 
-def build_status_message(splits, is_new_split):
+def build_runner_status(runner_name, splits):
     if not splits:
-        return None
+        return runner_name + " : pas encore de donnees\n"
 
     last = splits[-1]
     label = last.get("label", last.get("point", "???"))
@@ -165,151 +156,97 @@ def build_status_message(splits, is_new_split):
     dist_km = get_dist_from_point(point)
     remaining_km = max(0, MARATHON_DIST - dist_km)
 
-    # Avance / retard
     target_at_dist = dist_km * TARGET_PACE_SEC
     diff_sec = elapsed_sec - target_at_dist
 
     if diff_sec > 0:
-        diff_line = "RETARD : +" + format_time(abs(diff_sec))
+        diff_line = "Retard : +" + format_time(abs(diff_sec))
     else:
-        diff_line = "AVANCE : -" + format_time(abs(diff_sec))
+        diff_line = "Avance : -" + format_time(abs(diff_sec))
 
-    # Estimation RTRT
     est_finish = ""
     if etfp:
         parts = etfp.split("~")
         if len(parts) >= 2:
             est_finish = parts[1]
 
-    # Progression
     progress_pct = min(100, (dist_km / MARATHON_DIST) * 100)
     bar_full = int(progress_pct / 10)
     bar = "=" * bar_full + "-" * (10 - bar_full)
 
-    if is_new_split:
-        header = "NOUVEAU PASSAGE : " + label
+    finished = "FINISH" in point.upper() or "ARRIVEE" in point.upper()
+
+    if finished:
+        header = "ARRIVEE " + runner_name + " !!!"
+        if elapsed_sec < TARGET_TIME_SEC:
+            header += " SUB 4H !!!"
     else:
-        header = "STATUT RENAUD : " + label
+        header = runner_name + " - " + label
 
     lines = [
         header,
-        "",
         "[" + bar + "] " + str(int(progress_pct)) + "%",
-        "",
-        "Parcouru : " + str(round(dist_km, 1)) + " km / " + str(MARATHON_DIST) + " km",
+        "Parcouru : " + str(round(dist_km, 1)) + " / " + str(MARATHON_DIST) + " km",
         "Restant : " + str(round(remaining_km, 1)) + " km",
         "Duree : " + time_str.split(".")[0],
         "Allure segment : " + pace + " /km",
-        "Allure moyenne : " + pace_avg + " /km",
+        "Allure moy : " + pace_avg + " /km",
         diff_line,
-        "Estimation arrivee (RTRT) : " + est_finish,
-        "(Objectif : sub 4h00)"
     ]
 
-    if diff_sec > 120:
-        lines.append("")
-        lines.append("ALERTE : retard de " + str(int(diff_sec / 60)) + " min !")
+    if not finished and est_finish:
+        lines.append("Estimation arrivee : " + est_finish)
 
-    message = "\n".join(lines)
+    if diff_sec > 120 and not finished:
+        lines.append("ALERTE RETARD " + str(int(diff_sec / 60)) + " min !")
 
-    # Analyse IA
-    splits_summary = []
-    for s in splits:
-        splits_summary.append({
-            "point": s.get("point", ""),
-            "label": s.get("label", ""),
-            "time": s.get("time", ""),
-            "pace": s.get("kmPace", ""),
-            "paceAvg": s.get("kmPaceAvg", ""),
-            "splitTime": s.get("splitTime", ""),
-            "etfp": s.get("etfp", "")
-        })
-    analysis = ai_analysis(splits_summary, False)
+    return "\n".join(lines)
+
+
+def build_full_message():
+    all_runners_data = []
+    sections = []
+
+    for runner in RUNNERS:
+        splits = fetch_splits(runner["pid"])
+        if splits is None:
+            sections.append(runner["name"] + " : erreur API")
+            continue
+
+        status = build_runner_status(runner["name"], splits)
+        sections.append(status)
+
+        if splits:
+            summary = []
+            for s in splits:
+                summary.append({
+                    "point": s.get("point", ""),
+                    "time": s.get("time", ""),
+                    "pace": s.get("kmPace", ""),
+                    "paceAvg": s.get("kmPaceAvg", ""),
+                    "etfp": s.get("etfp", "")
+                })
+            all_runners_data.append({
+                "name": runner["name"],
+                "splits": summary
+            })
+
+    separator = "\n" + "---" + "\n"
+    message = separator.join(sections)
+    message += "\n(Objectif : sub 4h00)"
+
+    analysis = ai_analysis(all_runners_data)
     if analysis:
         message += "\n\nAnalyse IA :\n" + analysis
 
     return message
 
 
-def build_finish_message(splits):
-    last = splits[-1]
-    time_str = last.get("time", "0")
-    final_sec = parse_time_to_seconds(time_str)
-    pace_avg = last.get("kmPaceAvg", "N/A")
-
-    if final_sec < TARGET_TIME_SEC:
-        sub4 = "OUI !!!"
-    else:
-        sub4 = "Non"
-
-    lines = [
-        "ARRIVEE DE RENAUD !!!",
-        "",
-        "Temps final : " + time_str.split(".")[0],
-        "Sub 4h : " + sub4,
-        "Allure moyenne : " + pace_avg + " /km",
-        "Distance : " + str(MARATHON_DIST) + " km"
-    ]
-
-    message = "\n".join(lines)
-
-    splits_summary = []
-    for s in splits:
-        splits_summary.append({
-            "point": s.get("point", ""),
-            "label": s.get("label", ""),
-            "time": s.get("time", ""),
-            "pace": s.get("kmPace", ""),
-            "paceAvg": s.get("kmPaceAvg", ""),
-            "splitTime": s.get("splitTime", "")
-        })
-    analysis = ai_analysis(splits_summary, True)
-    if analysis:
-        message += "\n\nResume IA :\n" + analysis
-
-    return message
-
-
-def is_finished(splits):
-    if not splits:
-        return False
-    last = splits[-1]
-    point = last.get("point", "").upper()
-    return "FINISH" in point or "ARRIVEE" in point
-
-
 def mode_auto():
     print("=== AUTO ===")
-    splits = fetch_splits()
-
-    if splits is None:
-        send_telegram("Erreur : impossible de contacter RTRT.me")
-        return
-    if not splits:
-        lc = get_file(LAST_SPLIT_FILE)
-        if lc and int(lc) > 0:
-            send_telegram("Aucun nouveau passage detecte !")
-        else:
-            print("Pas encore de donnees")
-        return
-
-    current_count = len(splits)
-    lc = get_file(LAST_SPLIT_FILE)
-    last_count = int(lc) if lc else 0
-
-    if current_count <= last_count:
-        print("Pas de nouveau split (" + str(current_count) + " connus)")
-        return
-
-    if is_finished(splits):
-        send_telegram(build_finish_message(splits))
-    else:
-        msg = build_status_message(splits, True)
-        if msg:
-            send_telegram(msg)
-
-    save_file(LAST_SPLIT_FILE, current_count)
-    print("OK. " + str(current_count) + " splits")
+    msg = build_full_message()
+    send_telegram(msg)
+    print("Message envoye")
 
 
 def mode_reply():
@@ -337,18 +274,8 @@ def mode_reply():
             save_file(LAST_UPDATE_FILE, uid)
             continue
 
-        splits = fetch_splits()
-        if splits is None:
-            send_telegram("Impossible de contacter RTRT.me")
-        elif not splits:
-            send_telegram("Pas encore de donnees. Course pas commencee.")
-        elif is_finished(splits):
-            send_telegram(build_finish_message(splits))
-        else:
-            msg = build_status_message(splits, False)
-            if msg:
-                send_telegram(msg)
-
+        msg = build_full_message()
+        send_telegram(msg)
         save_file(LAST_UPDATE_FILE, uid)
 
     print("OK " + str(len(updates)) + " msg")

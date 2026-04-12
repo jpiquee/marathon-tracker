@@ -171,6 +171,34 @@ def ai_analysis(pace_trend, allure_moy, allure_dernier, finished, temps_final=No
         return None
 
 
+def ai_funny_story():
+    if not ANTHROPIC_API_KEY:
+        return "Clé API manquante pour générer une histoire."
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01"
+        }
+        prompt = (
+            "Raconte-moi une courte histoire drôle et originale en français. "
+            "Max 300 caractères, avec des emojis. Sois créatif et surprenant !"
+        )
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 300,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers, json=body, timeout=30
+        )
+        return r.json()["content"][0]["text"]
+    except Exception as e:
+        print("Erreur Claude histoire: " + str(e))
+        return "Désolé, impossible de générer une histoire pour le moment."
+
+
 def build_runner_status(runner_name, splits):
     if not splits:
         return runner_name + " : pas encore de donnees\n"
@@ -298,6 +326,9 @@ def mode_reply():
         if text.startswith("/status"):
             msg = build_full_message()
             send_telegram(msg)
+        elif text.startswith("/histoire"):
+            story = ai_funny_story()
+            send_telegram(story)
 
         save_file(LAST_UPDATE_FILE, uid)
 
@@ -343,6 +374,10 @@ def mode_listen(duration_sec=3300):
                 print("/status recu, envoi en cours...")
                 msg = build_full_message()
                 send_telegram(msg)
+            elif text.startswith("/histoire"):
+                print("/histoire recu, generation en cours...")
+                story = ai_funny_story()
+                send_telegram(story)
 
     print("Listen termine")
 

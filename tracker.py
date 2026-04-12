@@ -127,7 +127,7 @@ def compute_estimated_arrival(elapsed_sec_at_split, dist_km):
     return arrival.strftime("%Hh%M")
 
 
-def ai_analysis(runner_data, estimated_arrival):
+def ai_analysis(stats, estimated_arrival):
     if not ANTHROPIC_API_KEY:
         return None
     try:
@@ -140,16 +140,20 @@ def ai_analysis(runner_data, estimated_arrival):
             "anthropic-version": "2023-06-01"
         }
 
-        arrival_str = ("arrivee estimee : " + estimated_arrival) if estimated_arrival else "pas encore de donnees suffisantes"
+        if estimated_arrival:
+            arrival_str = estimated_arrival
+        else:
+            arrival_str = "inconnue"
 
         prompt = (
-            "Coach marathon. Marathon de Paris 2026, depart 8h40, "
-            "il est " + now_paris + " a Paris. "
-            "Calcul Python : " + arrival_str + ". "
-            "Splits Pomme : " + json.dumps(runner_data) + " "
-            "En francais, tres court (max 280 car), emojis : "
-            "allure reguliere ou non, temps final prevu, et confirme l heure d arrivee calculee. "
-            "Si elle a fini, felicite avec son temps."
+            "Coach marathon, reponds en francais, max 280 car, emojis. "
+            "Il est " + now_paris + " a Paris. "
+            "Voici les stats de Pomme au Marathon de Paris 2026 : "
+            + json.dumps(stats, ensure_ascii=False) + " "
+            "L heure d arrivee estimee (calculee par Python, NE PAS recalculer) est : " + arrival_str + ". "
+            "Commente uniquement : tendance allure (reguliere/acceleration/ralentissement), "
+            "et rappelle l heure d arrivee estimee. "
+            "Si elle a fini, felicite avec son temps total."
         )
         body = {
             "model": "claude-sonnet-4-20250514",
@@ -224,26 +228,33 @@ def build_full_message():
 
     message = build_runner_status(runner["name"], splits)
 
-    runner_data = None
     estimated_arrival = None
+    stats = None
     if splits:
         last = splits[-1]
         elapsed_sec = parse_time_to_seconds(last.get("time", "0"))
         dist_km = get_dist_from_point(last.get("point", ""))
         estimated_arrival = compute_estimated_arrival(elapsed_sec, dist_km)
 
-        summary = []
+        # Tendance allure sur les derniers splits (allure uniquement, pas les temps)
+        paces = []
         for s in splits:
-            summary.append({
-                "point": s.get("point", ""),
-                "time": s.get("time", ""),
-                "pace": s.get("kmPace", ""),
-                "paceAvg": s.get("kmPaceAvg", ""),
-            })
-        runner_data = {"name": runner["name"], "splits": summary}
+            p = s.get("kmPace", "")
+            pt = s.get("point", "")
+            if p and p != "N/A":
+                paces.append(pt + ":" + p)
 
-    if runner_data:
-        analysis = ai_analysis(runner_data, estimated_arrival)
+        stats = {
+            "km_parcourus": round(dist_km, 1),
+            "km_restants": round(max(0, MARATHON_DIST - dist_km), 1),
+            "allure_moy": last.get("kmPaceAvg", "N/A"),
+            "allure_dernier_segment": last.get("kmPace", "N/A"),
+            "tendance_allures": paces[-6:],  # 6 derniers splits
+            "finie": dist_km >= MARATHON_DIST,
+        }
+
+    if stats:
+        analysis = ai_analysis(stats, estimated_arrival)
         if analysis:
             message += "\n\nAnalyse IA :\n" + analysis
 

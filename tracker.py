@@ -127,37 +127,34 @@ def compute_estimated_arrival(elapsed_sec_at_split, dist_km):
     return arrival.strftime("%Hh%M")
 
 
-def ai_analysis(stats, estimated_arrival):
+def ai_analysis(splits_for_ai):
     if not ANTHROPIC_API_KEY:
         return None
     try:
         paris_tz = timezone(timedelta(hours=2))
-        now_paris = datetime.now(paris_tz).strftime("%Hh%M")
+        now = datetime.now(paris_tz)
+        now_str = now.strftime("%Hh%M")
+        race_start = now.replace(hour=8, minute=40, second=0, microsecond=0)
+        elapsed_total = now - race_start
+        elapsed_str = str(int(elapsed_total.total_seconds() // 3600)) + "h" + str(int((elapsed_total.total_seconds() % 3600) // 60)).zfill(2)
 
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
-
-        if estimated_arrival:
-            arrival_str = estimated_arrival
-        else:
-            arrival_str = "inconnue"
-
         prompt = (
-            "Coach marathon, reponds en francais, max 280 car, emojis. "
-            "Il est " + now_paris + " a Paris. "
-            "Voici les stats de Pomme au Marathon de Paris 2026 : "
-            + json.dumps(stats, ensure_ascii=False) + " "
-            "L heure d arrivee estimee (calculee par Python, NE PAS recalculer) est : " + arrival_str + ". "
-            "Commente uniquement : tendance allure (reguliere/acceleration/ralentissement), "
-            "et rappelle l heure d arrivee estimee. "
-            "Si elle a fini, felicite avec son temps total."
+            "Coach marathon expert. Marathon de Paris 2026, depart 8h40. "
+            "Il est actuellement " + now_str + " a Paris (temps ecoule depuis le depart : " + elapsed_str + "). "
+            "IMPORTANT : les champs 'temps_ecoule' dans les splits sont des durees depuis le depart de la course (pas des heures d horloge). "
+            "Splits de Pomme : " + json.dumps(splits_for_ai, ensure_ascii=False) + " "
+            "En francais, max 300 car, emojis : analyse la tendance d allure, "
+            "estime le temps final et l heure d arrivee (heure d horloge a Paris). "
+            "Si elle a fini, felicite avec son temps."
         )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 250,
+            "max_tokens": 280,
             "messages": [{"role": "user", "content": prompt}]
         }
         r = requests.post(
@@ -228,33 +225,24 @@ def build_full_message():
 
     message = build_runner_status(runner["name"], splits)
 
-    estimated_arrival = None
-    stats = None
+    splits_for_ai = None
     if splits:
-        last = splits[-1]
-        elapsed_sec = parse_time_to_seconds(last.get("time", "0"))
-        dist_km = get_dist_from_point(last.get("point", ""))
-        estimated_arrival = compute_estimated_arrival(elapsed_sec, dist_km)
-
-        # Tendance allure sur les derniers splits (allure uniquement, pas les temps)
-        paces = []
+        splits_for_ai = []
         for s in splits:
-            p = s.get("kmPace", "")
-            pt = s.get("point", "")
-            if p and p != "N/A":
-                paces.append(pt + ":" + p)
+            p = s.get("point", "")
+            t = s.get("time", "")
+            pace = s.get("kmPace", "")
+            pace_avg = s.get("kmPaceAvg", "")
+            if p and t:
+                splits_for_ai.append({
+                    "point": p,
+                    "temps_ecoule": t.split(".")[0],
+                    "allure_km": pace,
+                    "allure_moy": pace_avg,
+                })
 
-        stats = {
-            "km_parcourus": round(dist_km, 1),
-            "km_restants": round(max(0, MARATHON_DIST - dist_km), 1),
-            "allure_moy": last.get("kmPaceAvg", "N/A"),
-            "allure_dernier_segment": last.get("kmPace", "N/A"),
-            "tendance_allures": paces[-6:],  # 6 derniers splits
-            "finie": dist_km >= MARATHON_DIST,
-        }
-
-    if stats:
-        analysis = ai_analysis(stats, estimated_arrival)
+    if splits_for_ai:
+        analysis = ai_analysis(splits_for_ai)
         if analysis:
             message += "\n\nAnalyse IA :\n" + analysis
 

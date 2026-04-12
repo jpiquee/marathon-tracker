@@ -2,6 +2,7 @@ import requests
 import os
 import sys
 import time
+import random
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -33,22 +34,43 @@ def save_file(name, value):
         f.write(str(value))
 
 
+HUMOR_STYLES = [
+    "une blague absurde à chute inattendue",
+    "une anecdote hilarante sur un animal",
+    "un quiproquo comique entre deux personnes",
+    "une histoire de malchance enchaînée façon domino",
+    "une blague noire avec une fin surprenante",
+    "une histoire surréaliste et loufoque",
+    "une blague d'humour anglais (pince-sans-rire, ironie)",
+    "une anecdote embarrassante mais drôle du quotidien",
+    "une histoire avec une chute en jeu de mots",
+    "un sketch comique façon Monty Python",
+    "une histoire absurde inspirée des meilleures blagues scandinaves",
+    "une blague de science ou de logique avec une chute inattendue",
+]
+
+
 def ai_funny_story():
     if not ANTHROPIC_API_KEY:
         return "Clé API manquante pour générer une histoire."
     try:
+        style = random.choice(HUMOR_STYLES)
+        seed = random.randint(1, 99999)
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
         prompt = (
-            "Raconte-moi une courte histoire drôle et originale en français. "
-            "Max 300 caractères, avec des emojis. Sois créatif et surprenant !"
+            f"Tu es un humoriste de niveau mondial. Raconte-moi {style}. "
+            f"Elle doit être vraiment drôle, avec une chute qui surprend. "
+            f"En français, max 300 caractères, avec emojis. "
+            f"(variante #{seed})"
         )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 300,
+            "max_tokens": 350,
+            "temperature": 1,
             "messages": [{"role": "user", "content": prompt}]
         }
         r = requests.post(

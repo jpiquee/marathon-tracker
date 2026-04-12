@@ -27,7 +27,10 @@ jobs:
           path: |
             last_split_count.txt
             last_update_id.txt
-          key: marathon-state
+          key: marathon-state-${{ github.run_id }}
+          restore-keys: |
+            marathon-state-
+            listener-state-
 
       - name: Run auto tracker
         env:

@@ -127,7 +127,7 @@ def compute_estimated_arrival(elapsed_sec_at_split, dist_km):
     return arrival.strftime("%Hh%M")
 
 
-def ai_analysis(context):
+def ai_analysis(pace_trend, allure_moy, allure_dernier, finished, temps_final=None):
     if not ANTHROPIC_API_KEY:
         return None
     try:
@@ -136,18 +136,24 @@ def ai_analysis(context):
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
-        prompt = (
-            "Coach marathon expert. "
-            "Voici la situation ACTUELLE de Pomme au Marathon de Paris 2026 : "
-            + json.dumps(context, ensure_ascii=False) + " "
-            "En francais, max 300 car, emojis : "
-            "analyse la tendance d allure (reguliere/ralentissement/acceleration), "
-            "estime le temps final et l heure d arrivee a Paris. "
-            "Si elle a fini, felicite avec son temps."
-        )
+        if finished and temps_final:
+            prompt = (
+                "Coach marathon. Pomme vient de finir le Marathon de Paris 2026 en " + temps_final + ". "
+                "Felicite-la chaleureusement en francais, max 200 car, emojis."
+            )
+        else:
+            trend_str = ", ".join(s["point"] + " " + s["allure"] + "/km" for s in pace_trend[-8:])
+            prompt = (
+                "Coach marathon. Pomme court le Marathon de Paris 2026. "
+                "Allure moy : " + allure_moy + "/km. Dernier segment : " + allure_dernier + "/km. "
+                "Tendance : " + trend_str + ". "
+                "En francais, max 200 car, emojis : analyse uniquement la tendance d allure "
+                "(reguliere/acceleration/ralentissement) et un mot d encouragement. "
+                "Ne calcule pas et ne mentionne pas d heure d arrivee."
+            )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 280,
+            "max_tokens": 200,
             "messages": [{"role": "user", "content": prompt}]
         }
         r = requests.post(
@@ -170,17 +176,10 @@ def build_runner_status(runner_name, splits):
     time_str = last.get("time", "0")
     pace = last.get("kmPace", "N/A")
     pace_avg = last.get("kmPaceAvg", "N/A")
-    etfp = last.get("etfp", "")
 
     elapsed_sec = parse_time_to_seconds(time_str)
     dist_km = get_dist_from_point(point)
     remaining_km = max(0, MARATHON_DIST - dist_km)
-
-    est_finish = ""
-    if etfp:
-        parts = etfp.split("~")
-        if len(parts) >= 2:
-            est_finish = parts[1]
 
     progress_pct = min(100, (dist_km / MARATHON_DIST) * 100)
     bar_full = int(progress_pct / 10)
@@ -203,8 +202,10 @@ def build_runner_status(runner_name, splits):
         "Allure moy : " + pace_avg + " /km",
     ]
 
-    if not finished and est_finish:
-        lines.append("Estimation arrivee : " + est_finish)
+    if not finished:
+        est = compute_estimated_arrival(elapsed_sec, dist_km)
+        if est:
+            lines.append("Arrivee estimee : ~" + est)
 
     return "\n".join(lines)
 
@@ -220,40 +221,23 @@ def build_full_message():
 
     if splits:
         last = splits[-1]
-        elapsed_sec = parse_time_to_seconds(last.get("time", "0"))
-        dist_km = get_dist_from_point(last.get("point", ""))
+        point = last.get("point", "")
+        dist_km = get_dist_from_point(point)
+        finished = dist_km >= MARATHON_DIST or "FINISH" in point.upper()
 
-        # Position actuelle estimee par Python
-        paris_tz = timezone(timedelta(hours=2))
-        now = datetime.now(paris_tz)
-        race_start = now.replace(hour=8, minute=40, second=0, microsecond=0)
-        current_elapsed_sec = max(0, (now - race_start).total_seconds())
-        avg_pace_sec = elapsed_sec / dist_km if dist_km > 0 else 0
-        time_since_split = max(0, current_elapsed_sec - elapsed_sec)
-        dist_now = min(dist_km + (time_since_split / avg_pace_sec if avg_pace_sec > 0 else 0), MARATHON_DIST)
-        remaining_now = max(0, MARATHON_DIST - dist_now)
-        finished = dist_now >= MARATHON_DIST
-
-        # Tendance allure sur les splits (sans temps ecoule pour eviter confusion IA)
         pace_trend = []
         for s in splits:
             p = s.get("kmPace", "")
             if p and p != "N/A":
                 pace_trend.append({"point": s.get("point", ""), "allure": p})
 
-        context = {
-            "heure_paris_maintenant": now.strftime("%Hh%M"),
-            "position_actuelle_km": round(dist_now, 1),
-            "km_restants": round(remaining_now, 1),
-            "allure_moyenne_globale": last.get("kmPaceAvg", "N/A"),
-            "allure_dernier_segment": last.get("kmPace", "N/A"),
-            "tendance_allures_par_segment": pace_trend,
-            "finie": finished,
-        }
-        if finished:
-            context["temps_final"] = last.get("time", "").split(".")[0]
-
-        analysis = ai_analysis(context)
+        analysis = ai_analysis(
+            pace_trend=pace_trend,
+            allure_moy=last.get("kmPaceAvg", "N/A"),
+            allure_dernier=last.get("kmPace", "N/A"),
+            finished=finished,
+            temps_final=last.get("time", "").split(".")[0] if finished else None,
+        )
         if analysis:
             message += "\n\nAnalyse IA :\n" + analysis
 

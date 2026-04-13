@@ -49,6 +49,9 @@ COMEDY_STYLES = [
     ("Pierre Richard dans un de ses films", "cascade de malchances, quiproquo absurde"),
     ("Desproges au tribunal des flagrants délires", "réquisitoire hilarant, logique implacable"),
     ("un stand-up américain des années 90", "blague de bar adulte, chute en deux temps"),
+    ("Laurent Baffie", "vacherie courte et percutante, politiquement incorrect assumé, "
+     "ton cash et sans filtre, blague en une ou deux phrases avec chute assassine, "
+     "style 'best of Baffie' façon vacheries télé"),
 ]
 
 

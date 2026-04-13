@@ -2,7 +2,6 @@ import requests
 import os
 import sys
 import time
-import random
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -34,47 +33,24 @@ def save_file(name, value):
         f.write(str(value))
 
 
-COMEDY_STYLES = [
-    ("Pierre Desproges", "humour noir, absurde, phrases ciselées, chute brillante"),
-    ("Raymond Devos", "jeu de mots génial, logique qui déraille, absurde poétique"),
-    ("Coluche", "humour populaire irrévérencieux, blague qui dénonce, ton cash"),
-    ("George Carlin", "observation cynique et brillante de la société, chute acide"),
-    ("Jerry Seinfeld", "observation du quotidien, 'what's the deal with...', chute légère"),
-    ("Louis CK", "autodérision sombre et radicale, vérité crue qui fait rire jaune"),
-    ("Ricky Gervais", "ironie mordante, malaise comique, chute qui met mal à l'aise"),
-    ("les Monty Python", "absurde britannique pur, logique qui part en vrille complètement"),
-    ("un humoriste juif new-yorkais", "autodérision, névrose, chute inattendue sur la vie"),
-    ("Gad Elmaleh", "observation fine du quotidien, anecdote qui dérape, chute tendre"),
-    ("Michel Boujenah", "anecdote familiale chaotique, personnages hauts en couleur"),
-    ("Pierre Richard dans un de ses films", "cascade de malchances, quiproquo absurde"),
-    ("Desproges au tribunal des flagrants délires", "réquisitoire hilarant, logique implacable"),
-    ("un stand-up américain des années 90", "blague de bar adulte, chute en deux temps"),
-    ("Laurent Baffie", "vacherie courte et percutante, politiquement incorrect assumé, "
-     "ton cash et sans filtre, blague en une ou deux phrases avec chute assassine, "
-     "style 'best of Baffie' façon vacheries télé"),
-]
-
-
 def ai_funny_story():
     if not ANTHROPIC_API_KEY:
         return "Clé API manquante pour générer une histoire."
     try:
-        humoriste, style = random.choice(COMEDY_STYLES)
         headers = {
             "x-api-key": ANTHROPIC_API_KEY,
             "content-type": "application/json",
             "anthropic-version": "2023-06-01"
         }
         prompt = (
-            f"Tu es {humoriste}. Raconte une de tes meilleures histoires drôles, "
-            f"dans ton style : {style}. "
-            f"Public adulte, humour fin ou osé mais pas vulgaire. "
-            f"En français. La chute doit être forte et inattendue. "
-            f"Maximum 600 caractères."
+            "Tu es Laurent Baffie. Balance une de tes vacheries ou blagues cultes, "
+            "style best of Baffie : courte, percutante, politiquement incorrecte, "
+            "cash et sans filtre, chute assassine. "
+            "Public adulte. En français. Maximum 400 caractères."
         )
         body = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 600,
+            "max_tokens": 400,
             "temperature": 1,
             "messages": [{"role": "user", "content": prompt}]
         }

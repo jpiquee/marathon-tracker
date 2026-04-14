@@ -53,6 +53,17 @@ def weather_icon(code):
         return "⛈️"
 
 
+def wind_icon(speed):
+    if speed < 15:
+        return "🌬️"
+    elif speed < 30:
+        return "💨"
+    elif speed < 50:
+        return "💨💨"
+    else:
+        return "⚠️ vent fort"
+
+
 def get_weather():
     try:
         paris = requests.get(
@@ -71,6 +82,16 @@ def get_weather():
                 "latitude": 44.8378, "longitude": -0.5792,
                 "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
                 "timezone": "Europe/Paris", "forecast_days": 7
+            }, timeout=10
+        ).json()
+
+        biarritz = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": 43.4833, "longitude": -1.5586,
+                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode,windspeed_10m_max",
+                "timezone": "Europe/Paris", "forecast_days": 7,
+                "wind_speed_unit": "kmh"
             }, timeout=10
         ).json()
 
@@ -136,6 +157,27 @@ def get_weather():
             )
         if not found_weekend:
             lines.append("Pas de week-end dans les 7 prochains jours.")
+
+        # --- BIARRITZ : toute la semaine + vent ---
+        lines.append("")
+        lines.append("🏄 BIARRITZ — toute la semaine")
+        for i, date_str in enumerate(biarritz["daily"]["time"]):
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            if d < today:
+                continue
+            jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")
+            tmax = round(biarritz["daily"]["temperature_2m_max"][i])
+            tmin = round(biarritz["daily"]["temperature_2m_min"][i])
+            pluie = biarritz["daily"]["precipitation_sum"][i]
+            code = biarritz["daily"]["weathercode"][i]
+            speed = round(biarritz["daily"]["windspeed_10m_max"][i])
+            icon = weather_icon(code)
+            wicon = wind_icon(speed)
+            lines.append(
+                jour_label + " : " + str(tmax) + "°/" + str(tmin) + "° " +
+                icon + " " + str(round(pluie, 1)) + "mm  " +
+                str(speed) + "km/h " + wicon
+            )
 
         return "\n".join(lines)
 

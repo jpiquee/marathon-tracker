@@ -84,27 +84,7 @@ def get_weather():
             d = datetime.strptime(date_str, "%Y-%m-%d").date()
             if d < today:
                 continue
-            # Stop après dimanche
-            if d.weekday() == 6 and d > today:
-                jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")
-                t7 = hourly_temps[i * 24 + 7]
-                t8 = hourly_temps[i * 24 + 8]
-                t9 = hourly_temps[i * 24 + 9]
-                matin = round((t7 + t8 + t9) / 3)
-                pluie_prob = max(
-                    hourly_rain_prob[i * 24 + 7],
-                    hourly_rain_prob[i * 24 + 8],
-                    hourly_rain_prob[i * 24 + 9]
-                )
-                code = paris["daily"]["weathercode"][i]
-                icon = weather_icon(code)
-                warn = ""
-                if matin < 5:
-                    warn = " ❄️ FROID"
-                elif matin < 10:
-                    warn = " 🥶 frais"
-                pluie_str = (" 🌧️ pluie " + str(pluie_prob) + "%") if pluie_prob >= 40 else ""
-                lines.append(jour_label + " : " + str(matin) + "°C " + icon + warn + pluie_str)
+            if d.weekday() > 3:  # Stop après jeudi
                 break
 
             jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")

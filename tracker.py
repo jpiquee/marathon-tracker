@@ -152,6 +152,46 @@ def get_weather():
         return "Désolé, météo indisponible pour le moment."
 
 
+def get_weather_bordeaux_15():
+    try:
+        data = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": 44.8378, "longitude": -0.5792,
+                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
+                "timezone": "Europe/Paris", "forecast_days": 15
+            }, timeout=10
+        ).json()
+
+        today = datetime.now().date()
+        lines = ["🌿 BORDEAUX — 15 jours (jardin & sport)"]
+        for i, date_str in enumerate(data["daily"]["time"]):
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            if d < today:
+                continue
+            jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")
+            tmax = round(data["daily"]["temperature_2m_max"][i])
+            tmin = round(data["daily"]["temperature_2m_min"][i])
+            pluie = data["daily"]["precipitation_sum"][i]
+            code = data["daily"]["weathercode"][i]
+            icon = weather_icon(code)
+            if pluie < 2:
+                verdict = "✅ top"
+            elif pluie < 8:
+                verdict = "⚠️ mitigé"
+            else:
+                verdict = "❌ pluie"
+            lines.append(
+                jour_label + " : " + str(tmax) + "°/" + str(tmin) + "° " +
+                icon + " " + str(round(pluie, 1)) + "mm " + verdict
+            )
+        return "\n".join(lines)
+
+    except Exception as e:
+        print("Erreur météo15: " + str(e))
+        return "Désolé, météo indisponible pour le moment."
+
+
 def ai_funny_story():
     if not ANTHROPIC_API_KEY:
         return "Clé API manquante pour générer une histoire."
@@ -222,10 +262,12 @@ def mode_listen(duration_sec=3300):
                 print("/histoire recu, generation en cours...")
                 story = ai_funny_story()
                 send_telegram(story)
+            elif text.startswith("/meteo15"):
+                print("/meteo15 recu, recuperation en cours...")
+                send_telegram(get_weather_bordeaux_15())
             elif text.startswith("/meteo"):
                 print("/meteo recu, recuperation en cours...")
-                meteo = get_weather()
-                send_telegram(meteo)
+                send_telegram(get_weather())
 
     print("Listen termine")
 

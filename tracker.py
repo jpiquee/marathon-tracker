@@ -78,11 +78,19 @@ def get_weather():
         hourly_temps = paris["hourly"]["temperature_2m"]
         hourly_rain_prob = paris["hourly"]["precipitation_probability"]
 
+        # Si on est ven/sam/dim, montrer lun→jeu de la semaine prochaine
+        from datetime import timedelta
+        weekday = today.weekday()
+        if weekday <= 3:
+            start_paris = today
+        else:
+            start_paris = today + timedelta(days=7 - weekday)
+
         # --- PARIS : matin moto ---
         lines = ["🏍️ PARIS — matin 7h-9h (moto)"]
         for i, date_str in enumerate(paris["daily"]["time"]):
             d = datetime.strptime(date_str, "%Y-%m-%d").date()
-            if d < today:
+            if d < start_paris:
                 continue
             if d.weekday() > 3:  # Stop après jeudi
                 break

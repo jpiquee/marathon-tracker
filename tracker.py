@@ -2,7 +2,7 @@ import requests
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -11,6 +11,10 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 LAST_UPDATE_FILE = "last_update_id.txt"
 
 JOURS_FR = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+
+POMME_PID = "R5N9G28S"
+MARATHON_DISTANCE = 42.195
+MARATHON_EVENT_ID = "PARIS-MARATHON-2026"
 
 
 def send_telegram(message):
@@ -262,6 +266,158 @@ def ai_funny_story():
         return "Désolé, impossible de générer une histoire pour le moment."
 
 
+def build_progress_bar(km, total=MARATHON_DISTANCE, width=20):
+    pct = min(km / total, 1.0)
+    filled = round(pct * width)
+    filled = max(0, min(width, filled))
+    return "█" * filled + "░" * (width - filled)
+
+
+def format_duration(seconds):
+    seconds = int(seconds)
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h}h{m:02d}'{s:02d}\""
+
+
+def format_pace(sec_per_km):
+    sec_per_km = int(sec_per_km)
+    m = sec_per_km // 60
+    s = sec_per_km % 60
+    return f"{m}'{s:02d}\"/km"
+
+
+def get_marathon_data():
+    try:
+        url = (
+            "https://api.track.rtrt.me/events/"
+            + MARATHON_EVENT_ID + "/trackers/" + POMME_PID
+        )
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            return r.json()
+        print("API marathon: " + str(r.status_code))
+        return None
+    except Exception as e:
+        print("Erreur get_marathon_data: " + str(e))
+        return None
+
+
+def parse_marathon_data(data):
+    tracker = data.get("tracker", data)
+    km = float(tracker.get("distance", 0))
+    elapsed = int(tracker.get("elapsed", 0))
+    raw_pace = tracker.get("pace", 0)
+    if raw_pace:
+        pace = int(raw_pace)
+    elif km > 0 and elapsed > 0:
+        pace = int(elapsed / km)
+    else:
+        pace = 0
+    status = tracker.get("status", "")
+    splits = tracker.get("splits", [])
+    return {
+        "km": km,
+        "elapsed": elapsed,
+        "pace": pace,
+        "status": status,
+        "splits": splits,
+        "km_restants": round(MARATHON_DISTANCE - km, 3),
+        "pct": (km / MARATHON_DISTANCE) * 100,
+    }
+
+
+def format_marathon_message(metrics):
+    km = metrics["km"]
+    km_restants = metrics["km_restants"]
+    elapsed = metrics["elapsed"]
+    pace = metrics["pace"]
+    pct = metrics["pct"]
+    bar = build_progress_bar(km)
+    finished = metrics["status"] in ("finished", "done", "complete")
+    status_icon = "🏁" if finished else "🏃"
+    msg = "🍎 Pomme — Marathon de Paris\n"
+    msg += "[" + bar + "] " + f"{pct:.0f}%\n"
+    msg += f"📍 {km:.1f} km parcourus / {km_restants:.1f} km restants\n"
+    msg += "⏱️ Durée : " + format_duration(elapsed) + "\n"
+    msg += status_icon + " Allure : " + format_pace(pace) + "\n"
+    return msg
+
+
+def ai_marathon_analysis(metrics):
+    if not ANTHROPIC_API_KEY:
+        return "Clé API manquante pour l'analyse."
+
+    km = metrics["km"]
+    elapsed = metrics["elapsed"]
+    pace = metrics["pace"]
+    splits = metrics["splits"]
+    km_restants = metrics["km_restants"]
+
+    remaining_sec = km_restants * pace
+    total_sec = elapsed + remaining_sec
+    arrival = datetime.now() + timedelta(seconds=int(remaining_sec))
+    arrival_str = arrival.strftime("%Hh%M")
+    total_str = format_duration(total_sec)
+
+    splits_text = ""
+    for s in splits:
+        name = s.get("name", "")
+        dist = s.get("distance", "")
+        el = s.get("elapsed", 0)
+        p = s.get("pace", 0)
+        if el:
+            pace_part = (" — " + format_pace(p)) if p else ""
+            splits_text += "\n  " + str(name) + " (" + str(dist) + "km) : " + format_duration(el) + pace_part
+
+    prompt = (
+        "Tu es coach marathon expert. Analyse la course de Pomme au Marathon de Paris.\n\n"
+        "Position : " + f"{km:.1f}" + " km / " + str(MARATHON_DISTANCE) + " km\n"
+        "Durée écoulée : " + format_duration(elapsed) + "\n"
+        "Allure actuelle : " + format_pace(pace) + "\n"
+        "Restant : " + f"{km_restants:.1f}" + " km\n"
+        "Splits :" + (splits_text if splits_text else " non disponibles") + "\n\n"
+        "Réponds en 3 points courts :\n"
+        "📊 Analyse : régularité, tendance (accélération/ralentissement)\n"
+        "🏁 Temps final prédit : " + total_str + " si elle maintient ce rythme\n"
+        "🕐 Heure d'arrivée estimée : " + arrival_str + "\n\n"
+        "Sois concis, précis, encourageant. Max 400 caractères. En français."
+    )
+
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+        }
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 400,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers, json=body, timeout=30
+        )
+        return r.json()["content"][0]["text"]
+    except Exception as e:
+        print("Erreur Claude analyse: " + str(e))
+        return "📊 Analyse indisponible\n🏁 Temps prédit : " + total_str + "\n🕐 Arrivée estimée : " + arrival_str
+
+
+def track_pomme():
+    data = get_marathon_data()
+    if not data:
+        return "❌ Données de course indisponibles pour Pomme."
+    metrics = parse_marathon_data(data)
+    if metrics["km"] == 0 and metrics["elapsed"] == 0:
+        return "⏳ Course pas encore démarrée ou données non disponibles."
+    msg = format_marathon_message(metrics)
+    analysis = ai_marathon_analysis(metrics)
+    return msg + "\n" + analysis
+
+
 def mode_listen(duration_sec=3300):
     print("=== LISTEN " + str(duration_sec) + "s ===")
     lu = get_file(LAST_UPDATE_FILE)
@@ -297,7 +453,10 @@ def mode_listen(duration_sec=3300):
             if cid != TELEGRAM_CHAT_ID:
                 continue
 
-            if text.startswith("/histoire"):
+            if text.startswith("/pomme"):
+                print("/pomme recu, tracking en cours...")
+                send_telegram(track_pomme())
+            elif text.startswith("/histoire"):
                 print("/histoire recu, generation en cours...")
                 story = ai_funny_story()
                 send_telegram(story)

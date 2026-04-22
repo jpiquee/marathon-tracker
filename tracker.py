@@ -74,6 +74,15 @@ def get_weather():
             }, timeout=10
         ).json()
 
+        biarritz = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": 43.4833, "longitude": -1.5586,
+                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
+                "timezone": "Europe/Paris", "forecast_days": 7
+            }, timeout=10
+        ).json()
+
         today = datetime.now().date()
         hourly_temps = paris["hourly"]["temperature_2m"]
         hourly_rain_prob = paris["hourly"]["precipitation_probability"]
@@ -144,6 +153,36 @@ def get_weather():
             )
         if not found_weekend:
             lines.append("Pas de week-end dans les 7 prochains jours.")
+
+        # --- BIARRITZ : sam + dim ---
+        lines.append("")
+        lines.append("🏄 BIARRITZ — sam & dim")
+        found_biarritz = False
+        for i, date_str in enumerate(biarritz["daily"]["time"]):
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            if d < today:
+                continue
+            if d.weekday() not in (5, 6):  # Sam, Dim uniquement
+                continue
+            found_biarritz = True
+            jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")
+            tmax = round(biarritz["daily"]["temperature_2m_max"][i])
+            tmin = round(biarritz["daily"]["temperature_2m_min"][i])
+            pluie = biarritz["daily"]["precipitation_sum"][i]
+            code = biarritz["daily"]["weathercode"][i]
+            icon = weather_icon(code)
+            if pluie < 2:
+                verdict = "✅ top"
+            elif pluie < 8:
+                verdict = "⚠️ mitigé"
+            else:
+                verdict = "❌ pluie"
+            lines.append(
+                jour_label + " : " + str(tmax) + "°/" + str(tmin) + "° " +
+                icon + " " + str(round(pluie, 1)) + "mm " + verdict
+            )
+        if not found_biarritz:
+            lines.append("Pas de sam/dim dans les 7 prochains jours.")
 
         return "\n".join(lines)
 

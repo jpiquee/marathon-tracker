@@ -3,3 +3,5 @@ __pycache__/
 *.pyo
 credentials.json
 token.json
+gmail_rules.json
+pending_emails.json

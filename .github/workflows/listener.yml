@@ -24,12 +24,16 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests google-auth-oauthlib google-api-python-client
 
       - name: Restore state
         uses: actions/cache@v4
         with:
-          path: last_update_id.txt
+          path: |
+            last_update_id.txt
+            gmail_rules.json
+            pending_emails.json
+            token.json
           key: listener-state-${{ github.run_id }}
           restore-keys: |
             listener-state-
@@ -39,11 +43,16 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
         run: python tracker.py 3300
 
       - name: Save state
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: last_update_id.txt
+          path: |
+            last_update_id.txt
+            gmail_rules.json
+            pending_emails.json
+            token.json
           key: listener-state-${{ github.run_id }}

@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import json
+import re
 from datetime import datetime
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -13,9 +14,9 @@ LAST_UPDATE_FILE = "last_update_id.txt"
 try:
     from gmail_organizer import (
         get_gmail_service, load_rules, save_rules, commit_rules_to_github,
-        load_pending, save_pending, fetch_unread_emails, fetch_inbox_emails,
-        group_by_sender_domain, apply_rules_to_unread,
-        suggest_label, classify_with_ai, apply_label_to_email, learn_rule, LABELS_DEFAULT
+        load_pending, save_pending, fetch_unread_emails,
+        apply_rules_to_unread, suggest_label, classify_with_ai,
+        audit_classify_with_ai, apply_label_to_email, learn_rule, LABELS_DEFAULT
     )
     GMAIL_AVAILABLE = True
 except ImportError:
@@ -124,7 +125,6 @@ def get_weather():
         if not found: lines.append("Pas de sam/dim dans les 7 prochains jours.")
         return "\n".join(lines)
     except Exception as e:
-        print("Erreur meteo: " + str(e))
         return "Meteo indisponible."
 
 
@@ -140,7 +140,7 @@ def get_weather_bordeaux_15():
             verdict = "✅ top" if pluie < 2 else ("⚠️ mitigé" if pluie < 8 else "❌ pluie")
             lines.append(JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m") + " : " + str(round(data["daily"]["temperature_2m_max"][i])) + "°/" + str(round(data["daily"]["temperature_2m_min"][i])) + "° " + weather_icon(data["daily"]["weathercode"][i]) + " " + str(round(pluie, 1)) + "mm " + verdict)
         return "\n".join(lines)
-    except Exception as e:
+    except Exception:
         return "Meteo15 indisponible."
 
 
@@ -154,7 +154,7 @@ def ai_funny_story():
                   "messages": [{"role": "user", "content": "Tu es Laurent Baffie. Balance une vacherie culte, courte, percutante, politiquement incorrecte, chute assassine. Public adulte. En francais. Max 400 caracteres."}]},
             timeout=30)
         return r.json()["content"][0]["text"]
-    except Exception as e:
+    except Exception:
         return "Impossible de generer une histoire."
 
 
@@ -196,28 +196,50 @@ def handle_audit_mails():
     service = _gmail_check()
     if not service:
         return
-    send_telegram("🔍 Analyse de toute la boite en cours (jusqu'a 150 emails)...")
-    emails = fetch_inbox_emails(service, max_results=150)
+    send_telegram("🔍 Analyse des emails non-lus en cours...")
+    emails = fetch_unread_emails(service, max_results=50)
     if not emails:
-        send_telegram("Boite vide.")
+        send_telegram("✅ Aucun email non-lu !")
         return
-    groups = group_by_sender_domain(emails)
     rules = load_rules()
+    send_telegram(f"📊 {len(emails)} emails non-lus analyses par IA...")
+    classifiables = []
+    personal_count = 0
+    for email in emails:
+        label = suggest_label(email, rules)
+        if label:
+            classifiables.append((email, label))
+        else:
+            label = audit_classify_with_ai(email, rules, ANTHROPIC_API_KEY)
+            if label:
+                classifiables.append((email, label))
+            else:
+                personal_count += 1
+    if personal_count:
+        send_telegram(f"👤 {personal_count} email(s) personnel(s) ou action requise ignores (restent non-lus).")
+    if not classifiables:
+        send_telegram("✅ Tous vos emails non-lus necessitent votre attention. Rien a classer automatiquement.")
+        return
+    groups = {}
+    for email, label in classifiables:
+        m = re.search(r"@([\w.\-]+)", email["sender"])
+        domain = "@" + m.group(1) if m else "inconnu"
+        if domain not in groups:
+            groups[domain] = {"emails": [], "label": label}
+        groups[domain]["emails"].append(email)
     pending = load_pending()
     shown = 0
-    send_telegram(f"📊 {len(emails)} emails, {len(groups)} expediteurs. Propositions :")
-    for i, (domain, group_emails) in enumerate(groups.items()):
+    send_telegram(f"📁 {len(classifiables)} emails classifiables en {len(groups)} groupe(s) :")
+    for i, (domain, data) in enumerate(sorted(groups.items(), key=lambda x: -len(x[1]["emails"]))):
         if shown >= 20:
-            send_telegram(f"(+{len(groups)-shown} autres groupes — relancez /audit_mails pour continuer)")
+            send_telegram(f"(+{len(groups)-shown} autres groupes — relancez /audit_mails)")
             break
-        label = rules.get(domain)
-        source = "regle existante" if label else "IA"
-        if not label:
-            label = classify_with_ai(group_emails[0], rules, ANTHROPIC_API_KEY)
+        label = data["label"]
+        grp_emails = data["emails"]
         gid = f"ag{i}"
-        pending[gid] = {"type": "audit", "domain": domain, "email_ids": [e["id"] for e in group_emails], "suggested_label": label, "count": len(group_emails), "sample_subject": group_emails[0]["subject"]}
-        text = f"📨 {domain} ({len(group_emails)} email(s))\nEx: {group_emails[0]['subject'][:60]}\n\nSuggestion ({source}): [ {label} ]"
-        buttons = [[{"text": f"✅ OK ({len(group_emails)})", "callback_data": f"audit_ok:{gid}:{label}"}, {"text": "✏️ Modifier", "callback_data": f"audit_chg:{gid}"}, {"text": "⏭️ Ignorer", "callback_data": f"audit_skp:{gid}"}]]
+        pending[gid] = {"type": "audit", "domain": domain, "email_ids": [e["id"] for e in grp_emails], "suggested_label": label, "count": len(grp_emails), "sample_subject": grp_emails[0]["subject"]}
+        text = f"📨 {domain} ({len(grp_emails)} email(s))\nEx: {grp_emails[0]['subject'][:60]}\n\nSuggestion: [ {label} ]"
+        buttons = [[{"text": f"✅ OK ({len(grp_emails)})", "callback_data": f"audit_ok:{gid}:{label}"}, {"text": "✏️ Modifier", "callback_data": f"audit_chg:{gid}"}, {"text": "⏭️ Ignorer", "callback_data": f"audit_skp:{gid}"}]]
         send_telegram_with_buttons(text, buttons)
         shown += 1
     save_pending(pending)
@@ -277,7 +299,6 @@ def handle_gmail_callback(callback_query):
                 answer_callback_query(cq_id, "❌ Erreur")
         pending.pop(key, None)
         save_pending(pending)
-
     elif action == "gmail_change":
         rows = []
         row = []
@@ -289,7 +310,6 @@ def handle_gmail_callback(callback_query):
         if row: rows.append(row)
         send_telegram_with_buttons(f"Dossier pour:\n{info.get('subject', key)[:60]}", rows)
         answer_callback_query(cq_id)
-
     elif action == "gmail_skip":
         answer_callback_query(cq_id, "⏭️ Ignore")
         edit_message_text(chat_id, message_id, f"⏭️ Ignore: {info.get('subject', key)[:60]}")
@@ -327,7 +347,6 @@ def handle_audit_callback(callback_query):
                 commit_rules_to_github(rules)
         pending.pop(gid, None)
         save_pending(pending)
-
     elif action == "audit_chg":
         rows = []
         row = []
@@ -339,7 +358,6 @@ def handle_audit_callback(callback_query):
         if row: rows.append(row)
         send_telegram_with_buttons(f"Dossier pour {domain} ({count} emails) :", rows)
         answer_callback_query(cq_id)
-
     elif action == "audit_skp":
         answer_callback_query(cq_id, "⏭️ Ignore")
         edit_message_text(chat_id, message_id, f"⏭️ Ignore: {domain}")
@@ -383,13 +401,10 @@ def mode_listen(duration_sec=3300):
             if cid != TELEGRAM_CHAT_ID:
                 continue
             if text.startswith("/audit_mails"):
-                print("/audit_mails recu")
                 handle_audit_mails()
             elif text.startswith("/appliquer_regles"):
-                print("/appliquer_regles recu")
                 handle_appliquer_regles()
             elif text.startswith("/ranger_mails"):
-                print("/ranger_mails recu")
                 handle_ranger_mails()
             elif text.startswith("/histoire"):
                 send_telegram(ai_funny_story())

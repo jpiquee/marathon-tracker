@@ -265,34 +265,67 @@ def handle_audit_mails():
         save_rules(rules)
         commit_rules_to_github(rules)
 
-    # Rapport final
+    # ── Message 1 : résumé chiffré ──────────────────────────────────────────
     total = sum(applied.values())
-    lines = [f"✅ Audit termine : {total} emails classes sur {len(emails)}"]
-    if applied:
-        lines.append("")
-        lines.append("📁 Labels appliques :")
-        for lbl, cnt in sorted(applied.items(), key=lambda x: -x[1]):
-            lines.append(f"  • {lbl}: {cnt}")
-    if security_count:
-        lines.append(f"🔒 {security_count} email(s) securite laisses en inbox")
-    if garder_count:
-        lines.append(f"👤 {garder_count} email(s) personnels/non-classifiables")
-    if new_rules:
-        lines.append("")
-        lines.append(f"📋 {len(new_rules)} regle(s) creee(s) :")
-        for pattern, lbl in sorted(new_rules.items()):
-            lines.append(f"  {pattern} → {lbl}")
-    else:
-        lines.append("\n📋 Aucune nouvelle regle (regles existantes appliquees)")
+    lines = [f"✅ Audit termine : {total}/{len(emails)} emails classes\n"]
 
-    # Envoi en plusieurs messages si trop long
-    msg = "\n".join(lines)
-    if len(msg) > 3800:
-        cut = msg.rfind("\n", 0, 3800)
-        send_telegram(msg[:cut])
-        send_telegram(msg[cut+1:])
-    else:
-        send_telegram(msg)
+    # Stats par label sur 2 colonnes
+    ordered = [l for l in LABELS_DEFAULT if l in applied]
+    pairs = [(ordered[i], ordered[i+1] if i+1 < len(ordered) else None) for i in range(0, len(ordered), 2)]
+    for a, b in pairs:
+        left = f"{a}: {applied[a]}"
+        right = f"{b}: {applied[b]}" if b else ""
+        lines.append(f"  {left:<22}{right}")
+
+    footer = []
+    if security_count:
+        footer.append(f"🔒 {security_count} securite")
+    if garder_count:
+        footer.append(f"👤 {garder_count} personnels")
+    if new_rules:
+        footer.append(f"★ {len(new_rules)} nouvelles regles")
+    if footer:
+        lines.append("\n" + "  ".join(footer))
+
+    send_telegram("\n".join(lines))
+
+    # ── Message 2 : tableau des règles par catégorie ─────────────────────────
+    all_rules = load_rules()
+    if not all_rules:
+        send_telegram("📋 Aucune regle enregistree.")
+        return
+
+    # Groupement : label -> [patterns]
+    by_label = {lbl: [] for lbl in LABELS_DEFAULT}
+    for pattern, lbl in sorted(all_rules.items()):
+        if lbl in by_label:
+            by_label[lbl].append(pattern)
+
+    table_lines = [f"📋 REGLES ACTIVES ({len(all_rules)})\n"]
+    for lbl in LABELS_DEFAULT:
+        patterns = by_label.get(lbl, [])
+        if not patterns:
+            continue
+        new_in_label = [p for p in patterns if p in new_rules]
+        header = f"[ {lbl.upper()} — {len(patterns)} regle(s)"
+        if new_in_label:
+            header += f", {len(new_in_label)} nouvelle(s)"
+        header += " ]"
+        table_lines.append(header)
+        for p in patterns:
+            mark = " ★" if p in new_rules else ""
+            table_lines.append(f"  {p}{mark}")
+        table_lines.append("")
+
+    table_msg = "\n".join(table_lines)
+    # Découpe si > 3800 chars (1 coupe par label-block)
+    while len(table_msg) > 3800:
+        cut = table_msg.rfind("\n[ ", 0, 3800)
+        if cut == -1:
+            cut = table_msg.rfind("\n", 0, 3800)
+        send_telegram(table_msg[:cut])
+        table_msg = table_msg[cut+1:]
+    send_telegram(table_msg)
 
 
 def handle_appliquer_regles():

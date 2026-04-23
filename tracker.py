@@ -394,11 +394,14 @@ def handle_reset_callback(callback_query):
         if not service:
             send_telegram("Connexion Gmail impossible.")
             return
-        count = reset_gmail_labels(service)
+        def on_progress(n):
+            edit_message_text(chat_id, message_id, f"⏳ {n} emails trouvés, nettoyage en cours...")
+
+        count = reset_gmail_labels(service, on_progress=on_progress)
         if count < 0:
             edit_message_text(chat_id, message_id, "❌ Erreur lors du reset Gmail.")
         elif count == 0:
-            edit_message_text(chat_id, message_id, "✅ Aucun email avec labels du bot trouvé.")
+            edit_message_text(chat_id, message_id, "✅ Aucun email à réinitialiser.")
         else:
             edit_message_text(chat_id, message_id, f"✅ Reset terminé : {count} email(s) remis en non-lu, labels retirés.")
     elif data == "reset_cancel":

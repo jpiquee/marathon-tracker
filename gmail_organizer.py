@@ -295,14 +295,17 @@ def apply_label_to_email(service, email_id, label_name):
         return False
 
 
-def reset_gmail_labels(service):
-    """Retire les labels du bot de TOUTE la boite et remet tous les emails en non-lu."""
+def reset_gmail_labels(service, on_progress=None):
+    """Retire TOUS les labels (user + categories) de toute la boite et remet en inbox non-lu."""
     try:
+        # Collecte tous les labels a supprimer : user + categories Gmail
         all_labels_result = service.users().labels().list(userId="me").execute()
-        label_map = {lbl["name"].lower(): lbl["id"] for lbl in all_labels_result.get("labels", [])}
-        bot_label_ids = [label_map[name.lower()] for name in LABELS_DEFAULT if name.lower() in label_map]
+        remove_ids = [
+            lbl["id"] for lbl in all_labels_result.get("labels", [])
+            if lbl.get("type") == "user" or lbl["id"].startswith("CATEGORY_")
+        ]
 
-        # Parcourt TOUTE la boite (inbox + tous les dossiers sauf spam/trash)
+        # Pagination complete sur toute la boite hors spam/trash
         all_msg_ids = []
         params = {"userId": "me", "q": "-in:spam -in:trash", "maxResults": 500}
         result = service.users().messages().list(**params).execute()
@@ -314,9 +317,12 @@ def reset_gmail_labels(service):
         if not all_msg_ids:
             return 0
 
-        body = {"addLabelIds": ["UNREAD"]}
-        if bot_label_ids:
-            body["removeLabelIds"] = bot_label_ids
+        if on_progress:
+            on_progress(len(all_msg_ids))
+
+        body = {"addLabelIds": ["INBOX", "UNREAD"]}
+        if remove_ids:
+            body["removeLabelIds"] = remove_ids
 
         for i in range(0, len(all_msg_ids), 1000):
             batch = all_msg_ids[i:i + 1000]

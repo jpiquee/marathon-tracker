@@ -65,8 +65,7 @@ def commit_rules_to_github(rules):
     body = {"message": f"chore: apprentissage Gmail ({len(rules)} regles) [skip ci]", "content": content_b64, "branch": "main"}
     if sha:
         body["sha"] = sha
-    r = requests.put(api_url, headers=headers, json=body, timeout=15)
-    print("Commit regles Gmail: " + str(r.status_code))
+    requests.put(api_url, headers=headers, json=body, timeout=15)
 
 
 def load_pending():
@@ -107,28 +106,6 @@ def fetch_unread_emails(service, max_results=8):
         return []
 
 
-def fetch_inbox_emails(service, max_results=150):
-    try:
-        result = service.users().messages().list(
-            userId="me", q="in:inbox", maxResults=max_results
-        ).execute()
-        return [_get_email_meta(service, m["id"]) for m in result.get("messages", [])]
-    except Exception as e:
-        print("Erreur fetch inbox: " + str(e))
-        return []
-
-
-def group_by_sender_domain(emails):
-    groups = {}
-    for email in emails:
-        m = re.search(r"@([\w.\-]+)", email["sender"])
-        domain = "@" + m.group(1) if m else "inconnu"
-        if domain not in groups:
-            groups[domain] = []
-        groups[domain].append(email)
-    return dict(sorted(groups.items(), key=lambda x: -len(x[1])))
-
-
 def apply_rules_to_unread(service, rules, max_results=50):
     emails = fetch_unread_emails(service, max_results=max_results)
     counts = {}
@@ -159,8 +136,7 @@ def classify_with_ai(email, rules, api_key):
         return "Autre"
     rule_hint = ""
     if rules:
-        samples = list(rules.items())[:10]
-        rule_hint = "\nRegles apprises: " + ", ".join(f"{p}->{l}" for p, l in samples)
+        rule_hint = "\nRegles: " + ", ".join(f"{p}->{l}" for p, l in list(rules.items())[:10])
     prompt = (
         f"Classe cet email dans un des labels: {', '.join(LABELS_DEFAULT)}\n"
         f"Securite = alertes connexion, verification identite, confirmation mdp, 2FA, acces suspect.\n"
@@ -184,6 +160,43 @@ def classify_with_ai(email, rules, api_key):
     except Exception as e:
         print("Erreur AI classify: " + str(e))
         return "Autre"
+
+
+def audit_classify_with_ai(email, rules, api_key):
+    """Retourne un label si l'email peut etre classe automatiquement,
+    None s'il est personnel ou necessite une action (doit rester non-lu)."""
+    if not api_key:
+        return None
+    rule_hint = ""
+    if rules:
+        rule_hint = "\nRegles: " + ", ".join(f"{p}->{l}" for p, l in list(rules.items())[:8])
+    prompt = (
+        f"Analyse cet email. Deux cas:\n"
+        f"1. Email personnel adresse directement a moi, necessite une reponse ou action de ma part -> reponds: GARDER\n"
+        f"2. Email automatique (newsletter, notif automatique, confirmation commande, pub, alerte systeme) -> reponds avec UN label parmi: {', '.join(LABELS_DEFAULT)}\n"
+        f"En cas de doute, reponds GARDER.\n"
+        f"De: {email['sender']}\nObjet: {email['subject']}\nExtrait: {email['snippet']}"
+        f"{rule_hint}\n\nReponds UNIQUEMENT avec GARDER ou le label exact."
+    )
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "content-type": "application/json", "anthropic-version": "2023-06-01"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 15, "messages": [{"role": "user", "content": prompt}]},
+            timeout=15
+        )
+        label = r.json()["content"][0]["text"].strip()
+        if label == "GARDER":
+            return None
+        if label in LABELS_DEFAULT:
+            return label
+        for lbl in LABELS_DEFAULT:
+            if lbl.lower() in label.lower():
+                return lbl
+        return None
+    except Exception as e:
+        print("Erreur audit classify: " + str(e))
+        return None
 
 
 def get_or_create_label(service, name):

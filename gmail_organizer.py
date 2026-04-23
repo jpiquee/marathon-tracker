@@ -12,6 +12,16 @@ LABELS_DEFAULT = [
     "Finance", "Voyage", "Social", "Securite", "Autre"
 ]
 
+# Domaines personnels / generiques : jamais de regle domaine seul
+PERSONAL_DOMAINS = {
+    "gmail.com", "yahoo.fr", "yahoo.com", "outlook.com", "hotmail.com",
+    "hotmail.fr", "orange.fr", "free.fr", "laposte.net", "sfr.fr",
+    "wanadoo.fr", "icloud.com", "me.com", "google.com", "live.fr", "live.com"
+}
+
+# Prefixes de reponse/transfert = email de conversation, ne pas toucher
+REPLY_PREFIXES = ("re:", "re :", "ref:", "fwd:", "fw:", "tr:", "tr :")
+
 
 def get_gmail_service():
     try:
@@ -107,7 +117,7 @@ def fetch_unread_emails(service, max_results=8):
 
 
 def fetch_all_unread_emails(service):
-    """Recupere TOUS les emails non-lus via pagination (pas de limite)."""
+    """Recupere TOUS les emails non-lus via pagination."""
     try:
         all_msgs = []
         params = {"userId": "me", "q": "is:unread in:inbox", "maxResults": 500}
@@ -125,30 +135,66 @@ def fetch_all_unread_emails(service):
         return []
 
 
+def is_likely_personal(email):
+    """Heuristique rapide (sans IA) : True si l'email semble personnel ou appelle une action."""
+    subject = email["subject"].lower().strip()
+    sender = email["sender"].lower()
+
+    # Email de conversation (reponse ou transfert)
+    if any(subject.startswith(p) for p in REPLY_PREFIXES):
+        return True
+
+    # Expediteur depuis un domaine personnel/generique
+    for domain in PERSONAL_DOMAINS:
+        if f"@{domain}" in sender:
+            return True
+
+    return False
+
+
+def suggest_label(email, rules):
+    """Cherche une regle matching. Les regles composites (domaine+sujet) sont prioritaires."""
+    sender = email["sender"].lower()
+    subject = email["subject"].lower()
+
+    # 1. Regles composites domaine+mot-cle (plus specifiques)
+    for pattern, label in rules.items():
+        if "+" in pattern:
+            domain_part, keyword = pattern.split("+", 1)
+            if domain_part.lstrip("@") in sender and keyword in subject:
+                return label
+
+    # 2. Regles domaine seul
+    for pattern, label in rules.items():
+        if "+" not in pattern:
+            if pattern.startswith("@") and pattern[1:] in sender:
+                return label
+            if pattern.startswith("subj:") and pattern[5:] in subject:
+                return label
+
+    return None
+
+
 def apply_rules_to_unread(service, rules, max_results=None):
-    """Applique les regles sur TOUS les emails non-lus (max_results ignore)."""
+    """Applique les regles sur TOUS les non-lus, en protegeant les emails personnels."""
     emails = fetch_all_unread_emails(service)
     counts = {}
-    skipped = 0
+    skipped_personal = 0
+    skipped_no_rule = 0
+
     for email in emails:
+        # Protection : ne jamais toucher un email personnel ou de conversation
+        if is_likely_personal(email):
+            skipped_personal += 1
+            continue
         label = suggest_label(email, rules)
         if label:
             apply_label_to_email(service, email["id"], label)
             counts[label] = counts.get(label, 0) + 1
         else:
-            skipped += 1
-    return counts, skipped
+            skipped_no_rule += 1
 
-
-def suggest_label(email, rules):
-    sender = email["sender"].lower()
-    subject = email["subject"].lower()
-    for pattern, label in rules.items():
-        if pattern.startswith("@") and pattern[1:] in sender:
-            return label
-        if pattern.startswith("subj:") and pattern[5:] in subject:
-            return label
-    return None
+    return counts, skipped_personal, skipped_no_rule
 
 
 def classify_with_ai(email, rules, api_key):
@@ -250,12 +296,30 @@ def apply_label_to_email(service, email_id, label_name):
 
 
 def learn_rule(email, label, rules):
+    """Cree une regle composite domaine+sujet pour les domaines generiques,
+    domaine seul pour les domaines commerciaux specifiques."""
     sender = email.get("sender", "")
     m = re.search(r"@([\w.\-]+)", sender)
+
+    stop = {"re:", "fwd:", "re", "fw", "tr", "le", "la", "les", "un", "une",
+            "des", "de", "du", "et", "ou", "votre", "voici", "pour", "votre"}
+    words = [
+        w.lower() for w in re.split(r"\W+", email.get("subject", ""))
+        if len(w) > 4 and w.lower() not in stop
+    ]
+
     if m:
-        rules["@" + m.group(1)] = label
-    stop = {"re:", "fwd:", "re", "fw", "le", "la", "les", "un", "une", "des", "de", "du", "et", "ou", "votre", "voici", "pour"}
-    words = [w.lower() for w in re.split(r"\W+", email.get("subject", "")) if len(w) > 5 and w.lower() not in stop]
-    if words:
-        rules["subj:" + words[0]] = label
+        domain = m.group(1).lower()
+        domain_key = "@" + domain
+        if domain in PERSONAL_DOMAINS:
+            # Domaine generique : regle composite obligatoire (domaine+mot-cle sujet)
+            if words:
+                rules[f"{domain_key}+{words[0]}"] = label
+        else:
+            # Domaine commercial specifique : regle domaine seul
+            rules[domain_key] = label
+            # + regle composite pour plus de precision si on a un mot-cle
+            if words:
+                rules[f"{domain_key}+{words[0]}"] = label
+
     return rules

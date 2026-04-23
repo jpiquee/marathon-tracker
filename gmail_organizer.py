@@ -9,7 +9,7 @@ PENDING_EMAILS_FILE = "pending_emails.json"
 
 LABELS_DEFAULT = [
     "Travail", "Personnel", "Newsletter", "Commande",
-    "Finance", "Voyage", "Social", "Autre"
+    "Finance", "Voyage", "Social", "Sécurité", "Autre"
 ]
 
 
@@ -145,6 +145,7 @@ def classify_with_ai(email, rules, api_key):
 
     prompt = (
         f"Classe cet email dans un des labels: {', '.join(LABELS_DEFAULT)}\n"
+        f"Sécurité = alertes de connexion, vérification identité, confirmation mot de passe, double authentification, accès suspect.\n"
         f"De: {email['sender']}\n"
         f"Objet: {email['subject']}\n"
         f"Extrait: {email['snippet']}"

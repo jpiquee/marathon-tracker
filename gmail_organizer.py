@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import base64
 import requests
 
 GMAIL_RULES_FILE = "gmail_rules.json"
@@ -52,6 +53,39 @@ def save_rules(rules):
         json.dump(rules, f, ensure_ascii=False, indent=2)
 
 
+def commit_rules_to_github(rules):
+    """Commit gmail_rules.json into the repo so learning persists permanently."""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo = os.environ.get("GITHUB_REPOSITORY", "jpiquee/marathon-tracker")
+    if not token:
+        print("GITHUB_TOKEN manquant, règles non committées")
+        return
+
+    content = json.dumps(rules, ensure_ascii=False, indent=2)
+    content_b64 = base64.b64encode(content.encode()).decode()
+    api_url = f"https://api.github.com/repos/{repo}/contents/gmail_rules.json"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+    sha = None
+    r = requests.get(api_url, headers=headers, timeout=10)
+    if r.status_code == 200:
+        sha = r.json().get("sha")
+
+    body = {
+        "message": f"chore: apprentissage Gmail ({len(rules)} règles) [skip ci]",
+        "content": content_b64,
+        "branch": "main"
+    }
+    if sha:
+        body["sha"] = sha
+
+    r = requests.put(api_url, headers=headers, json=body, timeout=15)
+    print("Commit règles Gmail: " + str(r.status_code))
+
+
 def load_pending():
     try:
         with open(PENDING_EMAILS_FILE) as f:
@@ -90,7 +124,6 @@ def fetch_unread_emails(service, max_results=8):
 
 
 def suggest_label(email, rules):
-    """Return a label from learned rules, or None if no match."""
     sender = email["sender"].lower()
     subject = email["subject"].lower()
     for pattern, label in rules.items():
@@ -178,7 +211,6 @@ def apply_label_to_email(service, email_id, label_name):
 
 
 def learn_rule(email, label, rules):
-    """Extract sender domain and subject keyword to build reusable rules."""
     sender = email.get("sender", "")
     m = re.search(r"@([\w.\-]+)", sender)
     if m:

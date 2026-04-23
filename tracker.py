@@ -13,9 +13,9 @@ LAST_UPDATE_FILE = "last_update_id.txt"
 
 try:
     from gmail_organizer import (
-        get_gmail_service, load_rules, save_rules, load_pending, save_pending,
-        fetch_unread_emails, suggest_label, classify_with_ai,
-        apply_label_to_email, learn_rule, LABELS_DEFAULT
+        get_gmail_service, load_rules, save_rules, commit_rules_to_github,
+        load_pending, save_pending, fetch_unread_emails, suggest_label,
+        classify_with_ai, apply_label_to_email, learn_rule, LABELS_DEFAULT
     )
     GMAIL_AVAILABLE = True
 except ImportError:
@@ -35,7 +35,6 @@ def send_telegram(message):
 
 
 def send_telegram_with_buttons(message, buttons):
-    """Send a message with Telegram inline keyboard buttons."""
     url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -129,7 +128,6 @@ def get_weather():
         hourly_temps = paris["hourly"]["temperature_2m"]
         hourly_rain_prob = paris["hourly"]["precipitation_probability"]
 
-        # Si on est ven/sam/dim, montrer lun→jeu de la semaine prochaine
         from datetime import timedelta
         weekday = today.weekday()
         if weekday <= 3:
@@ -137,15 +135,13 @@ def get_weather():
         else:
             start_paris = today + timedelta(days=7 - weekday)
 
-        # --- PARIS : matin moto ---
         lines = ["🏍️ PARIS — matin 7h-9h (moto)"]
         for i, date_str in enumerate(paris["daily"]["time"]):
             d = datetime.strptime(date_str, "%Y-%m-%d").date()
             if d < start_paris:
                 continue
-            if d.weekday() > 3:  # Stop après jeudi
+            if d.weekday() > 3:
                 break
-
             jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")
             t7 = hourly_temps[i * 24 + 7]
             t8 = hourly_temps[i * 24 + 8]
@@ -166,7 +162,6 @@ def get_weather():
             pluie_str = (" 🌧️ pluie " + str(pluie_prob) + "%") if pluie_prob >= 40 else ""
             lines.append(jour_label + " : " + str(matin) + "°C " + icon + warn + pluie_str)
 
-        # --- BORDEAUX : vendredi→dimanche ---
         lines.append("")
         lines.append("🌿 BORDEAUX — ven→dim (jardin & sport)")
         found_weekend = False
@@ -174,7 +169,7 @@ def get_weather():
             d = datetime.strptime(date_str, "%Y-%m-%d").date()
             if d < today:
                 continue
-            if d.weekday() not in (4, 5, 6):  # Ven, Sam, Dim uniquement
+            if d.weekday() not in (4, 5, 6):
                 continue
             found_weekend = True
             jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")
@@ -196,7 +191,6 @@ def get_weather():
         if not found_weekend:
             lines.append("Pas de week-end dans les 7 prochains jours.")
 
-        # --- BIARRITZ : sam + dim ---
         lines.append("")
         lines.append("🏄 BIARRITZ — sam & dim")
         found_biarritz = False
@@ -204,7 +198,7 @@ def get_weather():
             d = datetime.strptime(date_str, "%Y-%m-%d").date()
             if d < today:
                 continue
-            if d.weekday() not in (5, 6):  # Sam, Dim uniquement
+            if d.weekday() not in (5, 6):
                 continue
             found_biarritz = True
             jour_label = JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m")
@@ -385,10 +379,11 @@ def handle_gmail_callback(callback_query):
             ok = apply_label_to_email(service, email_id, label)
             if ok:
                 answer_callback_query(cq_id, f"✅ Classé dans {label}")
-                edit_message_text(chat_id, message_id,
-                    f"✅ {subject_short}\n→ {label}")
+                edit_message_text(chat_id, message_id, f"✅ {subject_short}\n→ {label}")
                 if email_info:
-                    save_rules(learn_rule(email_info, label, rules))
+                    updated = learn_rule(email_info, label, rules)
+                    save_rules(updated)
+                    commit_rules_to_github(updated)
             else:
                 answer_callback_query(cq_id, "❌ Erreur classement")
         pending.pop(email_id, None)
@@ -397,16 +392,14 @@ def handle_gmail_callback(callback_query):
     elif action == "gmail_change":
         rows = []
         row = []
-        for i, lbl in enumerate(LABELS_DEFAULT):
+        for lbl in LABELS_DEFAULT:
             row.append({"text": lbl, "callback_data": f"gmail_lbl:{email_id}:{lbl}"})
             if len(row) == 2:
                 rows.append(row)
                 row = []
         if row:
             rows.append(row)
-        send_telegram_with_buttons(
-            f"Choisissez un dossier pour:\n{subject_short}", rows
-        )
+        send_telegram_with_buttons(f"Choisissez un dossier pour:\n{subject_short}", rows)
         answer_callback_query(cq_id)
 
     elif action == "gmail_lbl":
@@ -415,10 +408,11 @@ def handle_gmail_callback(callback_query):
             ok = apply_label_to_email(service, email_id, label)
             if ok:
                 answer_callback_query(cq_id, f"✅ Classé dans {label}")
-                edit_message_text(chat_id, message_id,
-                    f"✅ {subject_short}\n→ {label} (modifié)")
+                edit_message_text(chat_id, message_id, f"✅ {subject_short}\n→ {label} (modifié)")
                 if email_info:
-                    save_rules(learn_rule(email_info, label, rules))
+                    updated = learn_rule(email_info, label, rules)
+                    save_rules(updated)
+                    commit_rules_to_github(updated)
             else:
                 answer_callback_query(cq_id, "❌ Erreur classement")
         pending.pop(email_id, None)

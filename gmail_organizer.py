@@ -436,31 +436,36 @@ def reset_gmail_labels(service, on_progress=None):
         return -1
 
 
+_STOP = {
+    "re", "fwd", "fw", "tr", "le", "la", "les", "un", "une", "des", "de",
+    "du", "et", "ou", "votre", "notre", "vos", "mes", "ses", "leur", "leurs",
+    "voici", "pour", "dans", "avec", "nous", "vous", "cette", "mais", "donc",
+    "que", "qui", "quoi", "dont", "nouveau", "nouvelle", "plus", "tout",
+}
+
+
+def subject_key(subject):
+    """Premier mot significatif du sujet, utilise pour les regles composites."""
+    words = [
+        w.lower() for w in re.split(r"\W+", subject)
+        if len(w) > 3 and w.lower() not in _STOP
+    ]
+    return words[0] if words else ""
+
+
 def learn_rule(email, label, rules):
-    """Cree une regle composite domaine+sujet pour les domaines generiques,
-    domaine seul pour les domaines commerciaux specifiques."""
+    """Cree toujours une regle composite domaine+mot-cle-sujet.
+    Meme domaine, sujets differents = regles differentes = labels differents."""
     sender = email.get("sender", "")
     m = re.search(r"@([\w.\-]+)", sender)
-
-    stop = {"re:", "fwd:", "re", "fw", "tr", "le", "la", "les", "un", "une",
-            "des", "de", "du", "et", "ou", "votre", "voici", "pour", "votre"}
-    words = [
-        w.lower() for w in re.split(r"\W+", email.get("subject", ""))
-        if len(w) > 4 and w.lower() not in stop
-    ]
-
-    if m:
-        domain = m.group(1).lower()
-        domain_key = "@" + domain
-        if domain in PERSONAL_DOMAINS:
-            # Domaine generique : regle composite obligatoire (domaine+mot-cle sujet)
-            if words:
-                rules[f"{domain_key}+{words[0]}"] = label
-        else:
-            # Domaine commercial specifique : regle domaine seul
-            rules[domain_key] = label
-            # + regle composite pour plus de precision si on a un mot-cle
-            if words:
-                rules[f"{domain_key}+{words[0]}"] = label
-
+    if not m:
+        return rules
+    domain = m.group(1).lower()
+    domain_key = "@" + domain
+    keyword = subject_key(email.get("subject", ""))
+    if keyword:
+        rules[f"{domain_key}+{keyword}"] = label
+    elif domain not in PERSONAL_DOMAINS:
+        # Aucun mot-cle extractible : regle domaine seul en dernier recours
+        rules[domain_key] = label
     return rules

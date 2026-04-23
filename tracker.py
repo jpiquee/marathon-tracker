@@ -17,7 +17,7 @@ try:
         load_pending, save_pending, fetch_unread_emails, fetch_all_unread_emails,
         apply_rules_to_unread, suggest_label, classify_with_ai, is_likely_personal,
         audit_classify_with_ai, audit_classify_batch_with_ai,
-        apply_label_to_email, apply_labels_batch, learn_rule,
+        apply_label_to_email, apply_labels_batch, learn_rule, subject_key,
         LABELS_DEFAULT, LABELS_NO_AUTO, reset_gmail_labels
     )
     GMAIL_AVAILABLE = True
@@ -207,7 +207,7 @@ def handle_audit_mails():
     rules = load_rules()
     send_telegram(f"📊 {len(emails)} emails recuperes. Classification IA en cours...")
 
-    # Groupement par domaine, emails personnels filtres
+    # Groupement par domaine+mot-cle-sujet : meme expediteur, sujets differents = groupes differents
     groups = {}
     personal_count = 0
     for email in emails:
@@ -216,25 +216,27 @@ def handle_audit_mails():
             continue
         m = re.search(r"@([\w.\-]+)", email["sender"])
         domain = "@" + m.group(1) if m else "inconnu"
-        if domain not in groups:
-            groups[domain] = []
-        groups[domain].append(email)
+        sk = subject_key(email["subject"])
+        gkey = f"{domain}|{sk}" if sk else domain
+        if gkey not in groups:
+            groups[gkey] = []
+        groups[gkey].append(email)
 
-    # Regle existante ou batch IA pour les domaines inconnus
-    domain_labels = {}
+    # Regle existante ou batch IA pour les groupes inconnus
+    group_labels = {}
     needs_ai = []
-    for domain, grp_emails in groups.items():
+    for gkey, grp_emails in groups.items():
         label = suggest_label(grp_emails[0], rules)
         if label:
-            domain_labels[domain] = label
+            group_labels[gkey] = label
         else:
-            needs_ai.append((domain, grp_emails[0]))
+            needs_ai.append((gkey, grp_emails[0]))
 
     for i in range(0, len(needs_ai), 20):
         batch_results = audit_classify_batch_with_ai(needs_ai[i:i + 20], rules, ANTHROPIC_API_KEY)
-        domain_labels.update(batch_results)
-    for domain, _ in needs_ai:
-        domain_labels.setdefault(domain, None)
+        group_labels.update(batch_results)
+    for gkey, _ in needs_ai:
+        group_labels.setdefault(gkey, None)
 
     # Collecte des IDs par label + apprentissage des regles
     label_to_ids = {}
@@ -242,8 +244,8 @@ def handle_audit_mails():
     security_count = 0
     garder_count = personal_count
 
-    for domain, grp_emails in groups.items():
-        label = domain_labels.get(domain)
+    for gkey, grp_emails in groups.items():
+        label = group_labels.get(gkey)
         if label is None:
             garder_count += len(grp_emails)
             continue

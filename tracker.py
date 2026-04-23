@@ -124,7 +124,7 @@ def get_weather():
             lines.append(JOURS_FR[d.weekday()] + " " + d.strftime("%d/%m") + " : " + str(round(biarritz["daily"]["temperature_2m_max"][i])) + "°/" + str(round(biarritz["daily"]["temperature_2m_min"][i])) + "° " + weather_icon(biarritz["daily"]["weathercode"][i]) + " " + str(round(pluie, 1)) + "mm " + verdict)
         if not found: lines.append("Pas de sam/dim dans les 7 prochains jours.")
         return "\n".join(lines)
-    except Exception as e:
+    except Exception:
         return "Meteo indisponible."
 
 
@@ -253,16 +253,18 @@ def handle_appliquer_regles():
     if not rules:
         send_telegram("📋 Aucune regle apprise. Utilisez /ranger_mails ou /audit_mails d'abord.")
         return
-    send_telegram(f"⚙️ Application de {len(rules)} regles sur les emails non-lus...")
-    counts, skipped = apply_rules_to_unread(service, rules, max_results=50)
-    if not counts and skipped == 0:
+    send_telegram(f"⚙️ Application de {len(rules)} regles sur tous les emails non-lus...")
+    counts, skipped_personal, skipped_no_rule = apply_rules_to_unread(service, rules)
+    if not counts and skipped_personal == 0 and skipped_no_rule == 0:
         send_telegram("✅ Aucun email non-lu a traiter.")
         return
     lines = ["✅ Regles appliquees :"]
     for label, count in sorted(counts.items(), key=lambda x: -x[1]):
         lines.append(f"  • {label}: {count} email(s)")
-    if skipped:
-        lines.append(f"  • Sans regle connue: {skipped} email(s) (utilisez /ranger_mails)")
+    if skipped_personal:
+        lines.append(f"  👤 Proteges (personnels/conversations): {skipped_personal} email(s)")
+    if skipped_no_rule:
+        lines.append(f"  ❓ Sans regle connue: {skipped_no_rule} email(s) (utilisez /ranger_mails)")
     send_telegram("\n".join(lines))
 
 
@@ -283,7 +285,6 @@ def handle_gmail_callback(callback_query):
     pending = load_pending()
     rules = load_rules()
     info = pending.get(key, {})
-
     if action in ("gmail_ok", "gmail_lbl"):
         service = get_gmail_service()
         if service and key:
@@ -334,7 +335,6 @@ def handle_audit_callback(callback_query):
     domain = group.get("domain", "")
     email_ids = group.get("email_ids", [])
     count = group.get("count", 0)
-
     if action in ("audit_ok", "audit_lbl"):
         service = get_gmail_service()
         if service and email_ids:

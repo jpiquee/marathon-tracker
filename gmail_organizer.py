@@ -296,38 +296,35 @@ def apply_label_to_email(service, email_id, label_name):
 
 
 def reset_gmail_labels(service):
-    """Retire les labels du bot de tous les emails et les remet en non-lu."""
+    """Retire les labels du bot de TOUTE la boite et remet tous les emails en non-lu."""
     try:
         all_labels_result = service.users().labels().list(userId="me").execute()
         label_map = {lbl["name"].lower(): lbl["id"] for lbl in all_labels_result.get("labels", [])}
         bot_label_ids = [label_map[name.lower()] for name in LABELS_DEFAULT if name.lower() in label_map]
 
-        if not bot_label_ids:
-            return 0
-
-        all_msg_ids = set()
-        for label_id in bot_label_ids:
-            params = {"userId": "me", "labelIds": [label_id], "maxResults": 500}
-            result = service.users().messages().list(**params).execute()
-            for m in result.get("messages", []):
-                all_msg_ids.add(m["id"])
-            while "nextPageToken" in result:
-                result = service.users().messages().list(**params, pageToken=result["nextPageToken"]).execute()
-                for m in result.get("messages", []):
-                    all_msg_ids.add(m["id"])
+        # Parcourt TOUTE la boite (inbox + tous les dossiers sauf spam/trash)
+        all_msg_ids = []
+        params = {"userId": "me", "q": "-in:spam -in:trash", "maxResults": 500}
+        result = service.users().messages().list(**params).execute()
+        all_msg_ids.extend(m["id"] for m in result.get("messages", []))
+        while "nextPageToken" in result:
+            result = service.users().messages().list(**params, pageToken=result["nextPageToken"]).execute()
+            all_msg_ids.extend(m["id"] for m in result.get("messages", []))
 
         if not all_msg_ids:
             return 0
 
-        all_ids = list(all_msg_ids)
-        for i in range(0, len(all_ids), 1000):
-            batch = all_ids[i:i + 1000]
+        body = {"addLabelIds": ["UNREAD"]}
+        if bot_label_ids:
+            body["removeLabelIds"] = bot_label_ids
+
+        for i in range(0, len(all_msg_ids), 1000):
+            batch = all_msg_ids[i:i + 1000]
             service.users().messages().batchModify(
-                userId="me",
-                body={"ids": batch, "removeLabelIds": bot_label_ids, "addLabelIds": ["UNREAD"]}
+                userId="me", body={**body, "ids": batch}
             ).execute()
 
-        return len(all_ids)
+        return len(all_msg_ids)
     except Exception as e:
         print("Erreur reset_gmail: " + str(e))
         return -1

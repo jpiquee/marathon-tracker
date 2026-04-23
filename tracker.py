@@ -16,7 +16,8 @@ try:
         get_gmail_service, load_rules, save_rules, commit_rules_to_github,
         load_pending, save_pending, fetch_unread_emails,
         apply_rules_to_unread, suggest_label, classify_with_ai,
-        audit_classify_with_ai, apply_label_to_email, learn_rule, LABELS_DEFAULT
+        audit_classify_with_ai, apply_label_to_email, learn_rule, LABELS_DEFAULT,
+        reset_gmail_labels
     )
     GMAIL_AVAILABLE = True
 except ImportError:
@@ -365,6 +366,46 @@ def handle_audit_callback(callback_query):
         save_pending(pending)
 
 
+def handle_reset_gmail():
+    if not GMAIL_AVAILABLE:
+        send_telegram("Module Gmail non disponible.")
+        return
+    buttons = [[
+        {"text": "✅ Confirmer le reset", "callback_data": "reset_confirm"},
+        {"text": "❌ Annuler", "callback_data": "reset_cancel"}
+    ]]
+    send_telegram_with_buttons(
+        "⚠️ RESET GMAIL\n\nCela va :\n• Retirer tous les labels du bot\n• Remettre tous ces emails en non-lu\n\nConfirmer ?",
+        buttons
+    )
+
+
+def handle_reset_callback(callback_query):
+    cq_id = callback_query.get("id", "")
+    data = callback_query.get("data", "")
+    chat_id = str(callback_query.get("message", {}).get("chat", {}).get("id", ""))
+    message_id = callback_query.get("message", {}).get("message_id")
+    if chat_id != TELEGRAM_CHAT_ID:
+        return
+    if data == "reset_confirm":
+        answer_callback_query(cq_id, "⏳ Reset en cours...")
+        edit_message_text(chat_id, message_id, "⏳ Reset Gmail en cours...")
+        service = get_gmail_service()
+        if not service:
+            send_telegram("Connexion Gmail impossible.")
+            return
+        count = reset_gmail_labels(service)
+        if count < 0:
+            edit_message_text(chat_id, message_id, "❌ Erreur lors du reset Gmail.")
+        elif count == 0:
+            edit_message_text(chat_id, message_id, "✅ Aucun email avec labels du bot trouvé.")
+        else:
+            edit_message_text(chat_id, message_id, f"✅ Reset terminé : {count} email(s) remis en non-lu, labels retirés.")
+    elif data == "reset_cancel":
+        answer_callback_query(cq_id, "Annulé")
+        edit_message_text(chat_id, message_id, "❌ Reset annulé.")
+
+
 def mode_listen(duration_sec=3300):
     print("=== LISTEN " + str(duration_sec) + "s ===")
     lu = get_file(LAST_UPDATE_FILE)
@@ -394,13 +435,17 @@ def mode_listen(duration_sec=3300):
                     handle_gmail_callback(cq)
                 elif cb.startswith("audit_"):
                     handle_audit_callback(cq)
+                elif cb.startswith("reset_"):
+                    handle_reset_callback(cq)
                 continue
             message = update.get("message", {})
             cid = str(message.get("chat", {}).get("id", ""))
             text = message.get("text", "").strip()
             if cid != TELEGRAM_CHAT_ID:
                 continue
-            if text.startswith("/audit_mails"):
+            if text.startswith("/reset_gmail"):
+                handle_reset_gmail()
+            elif text.startswith("/audit_mails"):
                 handle_audit_mails()
             elif text.startswith("/appliquer_regles"):
                 handle_appliquer_regles()

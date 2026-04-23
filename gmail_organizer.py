@@ -269,6 +269,57 @@ def audit_classify_with_ai(email, rules, api_key):
         return None
 
 
+def audit_classify_batch_with_ai(domain_samples, rules, api_key):
+    """Classifie N groupes domaine en un seul appel IA. domain_samples = [(domain, email), ...]
+    Retourne {domain: label_or_None}."""
+    if not api_key or not domain_samples:
+        return {}
+    rule_hint = ""
+    if rules:
+        rule_hint = "\nRegles: " + ", ".join(f"{p}->{l}" for p, l in list(rules.items())[:8])
+    items = "\n\n".join(
+        f"{i+1}. De: {s['sender'][:70]}\nObjet: {s['subject'][:80]}\nExtrait: {s['snippet'][:120]}"
+        for i, (_, s) in enumerate(domain_samples)
+    )
+    prompt = (
+        f"Classe chaque email. Labels: {', '.join(LABELS_DEFAULT)}\n"
+        f"Reponds GARDER si: personnel, reponse requise, alerte securite (2FA, connexion suspecte, acces compte).\n"
+        f"Format strict, une ligne par email: '1: Label' ou '1: GARDER'{rule_hint}\n\n{items}"
+    )
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "content-type": "application/json", "anthropic-version": "2023-06-01"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": len(domain_samples) * 15 + 50,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=30
+        )
+        text = r.json()["content"][0]["text"]
+        results = {}
+        for line in text.strip().split("\n"):
+            m = re.match(r"(\d+)[:.]\s*(.+)", line.strip())
+            if not m:
+                continue
+            idx = int(m.group(1)) - 1
+            raw = m.group(2).strip()
+            if not (0 <= idx < len(domain_samples)):
+                continue
+            domain = domain_samples[idx][0]
+            if raw.upper() == "GARDER":
+                results[domain] = None
+            elif raw in LABELS_DEFAULT:
+                results[domain] = raw
+            else:
+                for lbl in LABELS_DEFAULT:
+                    if lbl.lower() in raw.lower():
+                        results[domain] = lbl
+                        break
+        return results
+    except Exception as e:
+        print("Erreur batch classify: " + str(e))
+        return {}
+
+
 def get_or_create_label(service, name):
     try:
         result = service.users().labels().list(userId="me").execute()

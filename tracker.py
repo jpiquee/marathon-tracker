@@ -14,9 +14,10 @@ LAST_UPDATE_FILE = "last_update_id.txt"
 try:
     from gmail_organizer import (
         get_gmail_service, load_rules, save_rules, commit_rules_to_github,
-        load_pending, save_pending, fetch_unread_emails,
-        apply_rules_to_unread, suggest_label, classify_with_ai,
-        audit_classify_with_ai, apply_label_to_email, learn_rule, LABELS_DEFAULT,
+        load_pending, save_pending, fetch_unread_emails, fetch_all_unread_emails,
+        apply_rules_to_unread, suggest_label, classify_with_ai, is_likely_personal,
+        audit_classify_with_ai, audit_classify_batch_with_ai,
+        apply_label_to_email, learn_rule, LABELS_DEFAULT, LABELS_NO_AUTO,
         reset_gmail_labels
     )
     GMAIL_AVAILABLE = True
@@ -197,53 +198,100 @@ def handle_audit_mails():
     service = _gmail_check()
     if not service:
         return
-    send_telegram("🔍 Analyse des emails non-lus en cours...")
-    emails = fetch_unread_emails(service, max_results=50)
+    send_telegram("🔍 Audit complet en cours — recuperation des emails...")
+    emails = fetch_all_unread_emails(service)
     if not emails:
         send_telegram("✅ Aucun email non-lu !")
         return
+
     rules = load_rules()
-    send_telegram(f"📊 {len(emails)} emails non-lus analyses par IA...")
-    classifiables = []
+    send_telegram(f"📊 {len(emails)} emails. Groupement et classification...")
+
+    # Groupement par domaine, emails personnels filtres
+    groups = {}
     personal_count = 0
     for email in emails:
-        label = suggest_label(email, rules)
-        if label:
-            classifiables.append((email, label))
-        else:
-            label = audit_classify_with_ai(email, rules, ANTHROPIC_API_KEY)
-            if label:
-                classifiables.append((email, label))
-            else:
-                personal_count += 1
-    if personal_count:
-        send_telegram(f"👤 {personal_count} email(s) personnel(s) ou action requise ignores (restent non-lus).")
-    if not classifiables:
-        send_telegram("✅ Tous vos emails non-lus necessitent votre attention. Rien a classer automatiquement.")
-        return
-    groups = {}
-    for email, label in classifiables:
+        if is_likely_personal(email):
+            personal_count += 1
+            continue
         m = re.search(r"@([\w.\-]+)", email["sender"])
         domain = "@" + m.group(1) if m else "inconnu"
         if domain not in groups:
-            groups[domain] = {"emails": [], "label": label}
-        groups[domain]["emails"].append(email)
-    pending = load_pending()
-    shown = 0
-    send_telegram(f"📁 {len(classifiables)} emails classifiables en {len(groups)} groupe(s) :")
-    for i, (domain, data) in enumerate(sorted(groups.items(), key=lambda x: -len(x[1]["emails"]))):
-        if shown >= 20:
-            send_telegram(f"(+{len(groups)-shown} autres groupes — relancez /audit_mails)")
-            break
-        label = data["label"]
-        grp_emails = data["emails"]
-        gid = f"ag{i}"
-        pending[gid] = {"type": "audit", "domain": domain, "email_ids": [e["id"] for e in grp_emails], "suggested_label": label, "count": len(grp_emails), "sample_subject": grp_emails[0]["subject"]}
-        text = f"📨 {domain} ({len(grp_emails)} email(s))\nEx: {grp_emails[0]['subject'][:60]}\n\nSuggestion: [ {label} ]"
-        buttons = [[{"text": f"✅ OK ({len(grp_emails)})", "callback_data": f"audit_ok:{gid}:{label}"}, {"text": "✏️ Modifier", "callback_data": f"audit_chg:{gid}"}, {"text": "⏭️ Ignorer", "callback_data": f"audit_skp:{gid}"}]]
-        send_telegram_with_buttons(text, buttons)
-        shown += 1
-    save_pending(pending)
+            groups[domain] = []
+        groups[domain].append(email)
+
+    # Regle existante ou batch IA pour les domaines inconnus
+    domain_labels = {}
+    needs_ai = []
+    for domain, grp_emails in groups.items():
+        label = suggest_label(grp_emails[0], rules)
+        if label:
+            domain_labels[domain] = label
+        else:
+            needs_ai.append((domain, grp_emails[0]))
+
+    for i in range(0, len(needs_ai), 20):
+        batch_results = audit_classify_batch_with_ai(needs_ai[i:i+20], rules, ANTHROPIC_API_KEY)
+        domain_labels.update(batch_results)
+    # domaines sans reponse IA -> GARDER
+    for domain, _ in needs_ai:
+        domain_labels.setdefault(domain, None)
+
+    # Application des labels + apprentissage des regles
+    applied = {}
+    new_rules = {}
+    security_count = 0
+    garder_count = personal_count
+
+    for domain, grp_emails in groups.items():
+        label = domain_labels.get(domain)
+        if label is None:
+            garder_count += len(grp_emails)
+            continue
+        if label in LABELS_NO_AUTO:
+            security_count += len(grp_emails)
+            continue
+        for email in grp_emails:
+            if apply_label_to_email(service, email["id"], label):
+                applied[label] = applied.get(label, 0) + 1
+        old_keys = set(rules)
+        rules = learn_rule({"sender": grp_emails[0]["sender"], "subject": grp_emails[0]["subject"]}, label, rules)
+        for k, v in rules.items():
+            if k not in old_keys or old_keys != set(rules):
+                new_rules[k] = v
+
+    if new_rules:
+        save_rules(rules)
+        commit_rules_to_github(rules)
+
+    # Rapport final
+    total = sum(applied.values())
+    lines = [f"✅ Audit termine : {total} emails classes sur {len(emails)}"]
+    if applied:
+        lines.append("")
+        lines.append("📁 Labels appliques :")
+        for lbl, cnt in sorted(applied.items(), key=lambda x: -x[1]):
+            lines.append(f"  • {lbl}: {cnt}")
+    if security_count:
+        lines.append(f"🔒 {security_count} email(s) securite laisses en inbox")
+    if garder_count:
+        lines.append(f"👤 {garder_count} email(s) personnels/non-classifiables")
+    if new_rules:
+        lines.append("")
+        lines.append(f"📋 {len(new_rules)} regle(s) creee(s) :")
+        for pattern, lbl in sorted(new_rules.items()):
+            lines.append(f"  {pattern} → {lbl}")
+    else:
+        lines.append("\n📋 Aucune nouvelle regle (regles existantes appliquees)")
+
+    # Envoi en plusieurs messages si trop long
+    msg = "\n".join(lines)
+    if len(msg) > 3800:
+        cut = msg.rfind("\n", 0, 3800)
+        send_telegram(msg[:cut])
+        send_telegram(msg[cut+1:])
+    else:
+        send_telegram(msg)
 
 
 def handle_appliquer_regles():

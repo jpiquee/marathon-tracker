@@ -2,6 +2,7 @@ import requests
 import os
 import sys
 import time
+import json
 from datetime import datetime
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -9,6 +10,16 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 LAST_UPDATE_FILE = "last_update_id.txt"
+
+try:
+    from gmail_organizer import (
+        get_gmail_service, load_rules, save_rules, load_pending, save_pending,
+        fetch_unread_emails, suggest_label, classify_with_ai,
+        apply_label_to_email, learn_rule, LABELS_DEFAULT
+    )
+    GMAIL_AVAILABLE = True
+except ImportError:
+    GMAIL_AVAILABLE = False
 
 JOURS_FR = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
 
@@ -21,6 +32,37 @@ def send_telegram(message):
         print("Telegram: " + str(r.status_code))
     except Exception as e:
         print("Erreur Telegram: " + str(e))
+
+
+def send_telegram_with_buttons(message, buttons):
+    """Send a message with Telegram inline keyboard buttons."""
+    url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message[:4000],
+        "reply_markup": {"inline_keyboard": buttons}
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        print("Telegram buttons: " + str(r.status_code))
+    except Exception as e:
+        print("Erreur Telegram buttons: " + str(e))
+
+
+def answer_callback_query(cq_id, text=""):
+    url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/answerCallbackQuery"
+    try:
+        requests.post(url, json={"callback_query_id": cq_id, "text": text}, timeout=5)
+    except Exception:
+        pass
+
+
+def edit_message_text(chat_id, message_id, text):
+    url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/editMessageText"
+    try:
+        requests.post(url, json={"chat_id": chat_id, "message_id": message_id, "text": text[:4000]}, timeout=10)
+    except Exception:
+        pass
 
 
 def get_file(name):
@@ -262,6 +304,133 @@ def ai_funny_story():
         return "Désolé, impossible de générer une histoire pour le moment."
 
 
+def handle_ranger_mails():
+    if not GMAIL_AVAILABLE:
+        send_telegram("❌ Module Gmail non disponible (dépendances manquantes).")
+        return
+
+    service = get_gmail_service()
+    if not service:
+        send_telegram("❌ Connexion Gmail impossible. Vérifiez le secret GMAIL_TOKEN.")
+        return
+
+    send_telegram("📬 Récupération des emails non-lus...")
+    emails = fetch_unread_emails(service, max_results=8)
+
+    if not emails:
+        send_telegram("✅ Aucun email non-lu dans la boîte de réception !")
+        return
+
+    rules = load_rules()
+    pending = load_pending()
+
+    send_telegram(f"📧 {len(emails)} email(s) à classer :")
+
+    for email in emails:
+        label = suggest_label(email, rules)
+        source = "règle apprise"
+        if not label:
+            label = classify_with_ai(email, rules, ANTHROPIC_API_KEY)
+            source = "IA"
+
+        pending[email["id"]] = {
+            "subject": email["subject"],
+            "sender": email["sender"],
+            "snippet": email["snippet"],
+            "suggested_label": label
+        }
+
+        text = (
+            f"De: {email['sender'][:55]}\n"
+            f"Objet: {email['subject'][:65]}\n"
+            f"{email['snippet'][:100]}\n\n"
+            f"Suggestion ({source}): [ {label} ]"
+        )
+        buttons = [[
+            {"text": "✅ OK", "callback_data": f"gmail_ok:{email['id']}:{label}"},
+            {"text": "✏️ Modifier", "callback_data": f"gmail_change:{email['id']}"},
+            {"text": "⏭️ Ignorer", "callback_data": f"gmail_skip:{email['id']}"},
+        ]]
+        send_telegram_with_buttons(text, buttons)
+
+    save_pending(pending)
+
+
+def handle_gmail_callback(callback_query):
+    cq_id = callback_query.get("id", "")
+    data = callback_query.get("data", "")
+    chat_id = str(callback_query.get("message", {}).get("chat", {}).get("id", ""))
+    message_id = callback_query.get("message", {}).get("message_id")
+
+    if chat_id != TELEGRAM_CHAT_ID:
+        return
+
+    if not GMAIL_AVAILABLE:
+        answer_callback_query(cq_id, "Module Gmail non disponible")
+        return
+
+    parts = data.split(":", 2)
+    action = parts[0] if len(parts) > 0 else ""
+    email_id = parts[1] if len(parts) > 1 else ""
+    label = parts[2] if len(parts) > 2 else ""
+
+    pending = load_pending()
+    rules = load_rules()
+    email_info = pending.get(email_id, {})
+    subject_short = email_info.get("subject", email_id)[:60]
+
+    if action == "gmail_ok":
+        service = get_gmail_service()
+        if service and email_id:
+            ok = apply_label_to_email(service, email_id, label)
+            if ok:
+                answer_callback_query(cq_id, f"✅ Classé dans {label}")
+                edit_message_text(chat_id, message_id,
+                    f"✅ {subject_short}\n→ {label}")
+                if email_info:
+                    save_rules(learn_rule(email_info, label, rules))
+            else:
+                answer_callback_query(cq_id, "❌ Erreur classement")
+        pending.pop(email_id, None)
+        save_pending(pending)
+
+    elif action == "gmail_change":
+        rows = []
+        row = []
+        for i, lbl in enumerate(LABELS_DEFAULT):
+            row.append({"text": lbl, "callback_data": f"gmail_lbl:{email_id}:{lbl}"})
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        send_telegram_with_buttons(
+            f"Choisissez un dossier pour:\n{subject_short}", rows
+        )
+        answer_callback_query(cq_id)
+
+    elif action == "gmail_lbl":
+        service = get_gmail_service()
+        if service and email_id and label:
+            ok = apply_label_to_email(service, email_id, label)
+            if ok:
+                answer_callback_query(cq_id, f"✅ Classé dans {label}")
+                edit_message_text(chat_id, message_id,
+                    f"✅ {subject_short}\n→ {label} (modifié)")
+                if email_info:
+                    save_rules(learn_rule(email_info, label, rules))
+            else:
+                answer_callback_query(cq_id, "❌ Erreur classement")
+        pending.pop(email_id, None)
+        save_pending(pending)
+
+    elif action == "gmail_skip":
+        answer_callback_query(cq_id, "⏭️ Ignoré")
+        edit_message_text(chat_id, message_id, f"⏭️ Ignoré: {subject_short}")
+        pending.pop(email_id, None)
+        save_pending(pending)
+
+
 def mode_listen(duration_sec=3300):
     print("=== LISTEN " + str(duration_sec) + "s ===")
     lu = get_file(LAST_UPDATE_FILE)
@@ -288,16 +457,27 @@ def mode_listen(duration_sec=3300):
 
         for update in updates:
             uid = update.get("update_id", 0)
+            last_update_id = uid
+            save_file(LAST_UPDATE_FILE, uid)
+
+            callback_query = update.get("callback_query", {})
+            if callback_query:
+                cb_data = callback_query.get("data", "")
+                if cb_data.startswith("gmail_"):
+                    handle_gmail_callback(callback_query)
+                continue
+
             message = update.get("message", {})
             cid = str(message.get("chat", {}).get("id", ""))
             text = message.get("text", "").strip()
-            last_update_id = uid
-            save_file(LAST_UPDATE_FILE, uid)
 
             if cid != TELEGRAM_CHAT_ID:
                 continue
 
-            if text.startswith("/histoire"):
+            if text.startswith("/ranger_mails"):
+                print("/ranger_mails recu")
+                handle_ranger_mails()
+            elif text.startswith("/histoire"):
                 print("/histoire recu, generation en cours...")
                 story = ai_funny_story()
                 send_telegram(story)

@@ -120,22 +120,66 @@ def fetch_unread_emails(service, max_results=8):
 
 
 def fetch_all_unread_emails(service):
-    """Recupere TOUS les emails non-lus via pagination."""
+    """Recupere TOUS les emails non-lus : pagination pour les IDs, batch API pour les metadonnees."""
     try:
-        all_msgs = []
+        # Phase 1 : recuperation de tous les IDs (rapide, pagination)
+        all_ids = []
         params = {"userId": "me", "q": "is:unread in:inbox", "maxResults": 500}
         result = service.users().messages().list(**params).execute()
-        all_msgs.extend(result.get("messages", []))
+        all_ids.extend(m["id"] for m in result.get("messages", []))
         while "nextPageToken" in result:
             result = service.users().messages().list(
                 **params, pageToken=result["nextPageToken"]
             ).execute()
-            all_msgs.extend(result.get("messages", []))
-        print(f"Total non-lus trouves: {len(all_msgs)}")
-        return [_get_email_meta(service, m["id"]) for m in all_msgs]
+            all_ids.extend(m["id"] for m in result.get("messages", []))
+        print(f"Total non-lus trouves: {len(all_ids)}")
+
+        # Phase 2 : metadonnees par batch de 100 (un seul appel HTTP par batch)
+        emails = []
+
+        def _cb(request_id, response, exception):
+            if exception or not response:
+                return
+            hdrs = {h["name"]: h["value"] for h in response["payload"]["headers"]}
+            emails.append({
+                "id": response["id"],
+                "subject": hdrs.get("Subject", "(sans objet)")[:100],
+                "sender": hdrs.get("From", "inconnu")[:80],
+                "snippet": response.get("snippet", "")[:150],
+            })
+
+        for i in range(0, len(all_ids), 100):
+            batch = service.new_batch_http_request(callback=_cb)
+            for msg_id in all_ids[i:i + 100]:
+                batch.add(service.users().messages().get(
+                    userId="me", id=msg_id, format="metadata",
+                    metadataHeaders=["Subject", "From"]
+                ))
+            batch.execute()
+
+        return emails
     except Exception as e:
         print("Erreur fetch all unread: " + str(e))
         return []
+
+
+def apply_labels_batch(service, label_to_ids):
+    """batchModify par label. label_to_ids = {label_name: [email_id, ...]}
+    Retourne {label_name: count}."""
+    applied = {}
+    for label_name, ids in label_to_ids.items():
+        if not ids:
+            continue
+        label_id = get_or_create_label(service, label_name)
+        if not label_id:
+            continue
+        for i in range(0, len(ids), 1000):
+            service.users().messages().batchModify(
+                userId="me",
+                body={"ids": ids[i:i + 1000], "addLabelIds": [label_id], "removeLabelIds": ["UNREAD"]}
+            ).execute()
+        applied[label_name] = len(ids)
+    return applied
 
 
 def is_likely_personal(email):

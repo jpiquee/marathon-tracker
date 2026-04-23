@@ -17,8 +17,8 @@ try:
         load_pending, save_pending, fetch_unread_emails, fetch_all_unread_emails,
         apply_rules_to_unread, suggest_label, classify_with_ai, is_likely_personal,
         audit_classify_with_ai, audit_classify_batch_with_ai,
-        apply_label_to_email, learn_rule, LABELS_DEFAULT, LABELS_NO_AUTO,
-        reset_gmail_labels
+        apply_label_to_email, apply_labels_batch, learn_rule,
+        LABELS_DEFAULT, LABELS_NO_AUTO, reset_gmail_labels
     )
     GMAIL_AVAILABLE = True
 except ImportError:
@@ -198,14 +198,14 @@ def handle_audit_mails():
     service = _gmail_check()
     if not service:
         return
-    send_telegram("🔍 Audit complet en cours — recuperation des emails...")
+    send_telegram("🔍 Audit complet — recuperation des IDs...")
     emails = fetch_all_unread_emails(service)
     if not emails:
         send_telegram("✅ Aucun email non-lu !")
         return
 
     rules = load_rules()
-    send_telegram(f"📊 {len(emails)} emails. Groupement et classification...")
+    send_telegram(f"📊 {len(emails)} emails recuperes. Classification IA en cours...")
 
     # Groupement par domaine, emails personnels filtres
     groups = {}
@@ -231,14 +231,13 @@ def handle_audit_mails():
             needs_ai.append((domain, grp_emails[0]))
 
     for i in range(0, len(needs_ai), 20):
-        batch_results = audit_classify_batch_with_ai(needs_ai[i:i+20], rules, ANTHROPIC_API_KEY)
+        batch_results = audit_classify_batch_with_ai(needs_ai[i:i + 20], rules, ANTHROPIC_API_KEY)
         domain_labels.update(batch_results)
-    # domaines sans reponse IA -> GARDER
     for domain, _ in needs_ai:
         domain_labels.setdefault(domain, None)
 
-    # Application des labels + apprentissage des regles
-    applied = {}
+    # Collecte des IDs par label + apprentissage des regles
+    label_to_ids = {}
     new_rules = {}
     security_count = 0
     garder_count = personal_count
@@ -251,14 +250,16 @@ def handle_audit_mails():
         if label in LABELS_NO_AUTO:
             security_count += len(grp_emails)
             continue
-        for email in grp_emails:
-            if apply_label_to_email(service, email["id"], label):
-                applied[label] = applied.get(label, 0) + 1
-        old_keys = set(rules)
+        label_to_ids.setdefault(label, []).extend(e["id"] for e in grp_emails)
+        old_rules = dict(rules)
         rules = learn_rule({"sender": grp_emails[0]["sender"], "subject": grp_emails[0]["subject"]}, label, rules)
         for k, v in rules.items():
-            if k not in old_keys or old_keys != set(rules):
+            if k not in old_rules or old_rules[k] != v:
                 new_rules[k] = v
+
+    # Application via batchModify (un appel par label)
+    send_telegram(f"📬 Application des labels sur {sum(len(v) for v in label_to_ids.values())} emails...")
+    applied = apply_labels_batch(service, label_to_ids)
 
     if new_rules:
         save_rules(rules)

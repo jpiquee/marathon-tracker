@@ -106,8 +106,28 @@ def fetch_unread_emails(service, max_results=8):
         return []
 
 
-def apply_rules_to_unread(service, rules, max_results=50):
-    emails = fetch_unread_emails(service, max_results=max_results)
+def fetch_all_unread_emails(service):
+    """Recupere TOUS les emails non-lus via pagination (pas de limite)."""
+    try:
+        all_msgs = []
+        params = {"userId": "me", "q": "is:unread in:inbox", "maxResults": 500}
+        result = service.users().messages().list(**params).execute()
+        all_msgs.extend(result.get("messages", []))
+        while "nextPageToken" in result:
+            result = service.users().messages().list(
+                **params, pageToken=result["nextPageToken"]
+            ).execute()
+            all_msgs.extend(result.get("messages", []))
+        print(f"Total non-lus trouves: {len(all_msgs)}")
+        return [_get_email_meta(service, m["id"]) for m in all_msgs]
+    except Exception as e:
+        print("Erreur fetch all unread: " + str(e))
+        return []
+
+
+def apply_rules_to_unread(service, rules, max_results=None):
+    """Applique les regles sur TOUS les emails non-lus (max_results ignore)."""
+    emails = fetch_all_unread_emails(service)
     counts = {}
     skipped = 0
     for email in emails:
@@ -163,8 +183,7 @@ def classify_with_ai(email, rules, api_key):
 
 
 def audit_classify_with_ai(email, rules, api_key):
-    """Retourne un label si l'email peut etre classe automatiquement,
-    None s'il est personnel ou necessite une action (doit rester non-lu)."""
+    """Retourne un label si classifiable automatiquement, None si personnel/action requise."""
     if not api_key:
         return None
     rule_hint = ""
@@ -172,8 +191,8 @@ def audit_classify_with_ai(email, rules, api_key):
         rule_hint = "\nRegles: " + ", ".join(f"{p}->{l}" for p, l in list(rules.items())[:8])
     prompt = (
         f"Analyse cet email. Deux cas:\n"
-        f"1. Email personnel adresse directement a moi, necessite une reponse ou action de ma part -> reponds: GARDER\n"
-        f"2. Email automatique (newsletter, notif automatique, confirmation commande, pub, alerte systeme) -> reponds avec UN label parmi: {', '.join(LABELS_DEFAULT)}\n"
+        f"1. Email personnel adresse directement a moi, necessite une reponse ou action -> reponds: GARDER\n"
+        f"2. Email automatique (newsletter, notif, commande, pub, alerte systeme) -> reponds avec UN label parmi: {', '.join(LABELS_DEFAULT)}\n"
         f"En cas de doute, reponds GARDER.\n"
         f"De: {email['sender']}\nObjet: {email['subject']}\nExtrait: {email['snippet']}"
         f"{rule_hint}\n\nReponds UNIQUEMENT avec GARDER ou le label exact."

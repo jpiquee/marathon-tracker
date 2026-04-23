@@ -12,6 +12,9 @@ LABELS_DEFAULT = [
     "Finance", "Voyage", "Social", "Securite", "Autre"
 ]
 
+# Labels jamais appliques automatiquement : l'email reste en inbox non-lu
+LABELS_NO_AUTO = {"Securite"}
+
 # Domaines personnels / generiques : jamais de regle domaine seul
 PERSONAL_DOMAINS = {
     "gmail.com", "yahoo.fr", "yahoo.com", "outlook.com", "hotmail.com",
@@ -188,7 +191,9 @@ def apply_rules_to_unread(service, rules, max_results=None):
             skipped_personal += 1
             continue
         label = suggest_label(email, rules)
-        if label:
+        if label in LABELS_NO_AUTO:
+            skipped_personal += 1
+        elif label:
             apply_label_to_email(service, email["id"], label)
             counts[label] = counts.get(label, 0) + 1
         else:
@@ -237,8 +242,8 @@ def audit_classify_with_ai(email, rules, api_key):
         rule_hint = "\nRegles: " + ", ".join(f"{p}->{l}" for p, l in list(rules.items())[:8])
     prompt = (
         f"Analyse cet email. Deux cas:\n"
-        f"1. Email personnel adresse directement a moi, necessite une reponse ou action -> reponds: GARDER\n"
-        f"2. Email automatique (newsletter, notif, commande, pub, alerte systeme) -> reponds avec UN label parmi: {', '.join(LABELS_DEFAULT)}\n"
+        f"1. Email personnel, necessite une reponse/action, OU alerte de securite (connexion, 2FA, ajout tel, acces suspect, Steam/Google/Apple security) -> reponds: GARDER\n"
+        f"2. Email automatique (newsletter, notif, commande, pub) -> reponds avec UN label parmi: {', '.join(LABELS_DEFAULT)}\n"
         f"En cas de doute, reponds GARDER.\n"
         f"De: {email['sender']}\nObjet: {email['subject']}\nExtrait: {email['snippet']}"
         f"{rule_hint}\n\nReponds UNIQUEMENT avec GARDER ou le label exact."

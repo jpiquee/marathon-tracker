@@ -168,6 +168,10 @@ def fetch_all_unread_emails(service):
                 emails.append(_get_email_meta(service, msg_id))
             except Exception:
                 pass
+    else:
+        # La batch API renvoie dans un ordre quelconque : on re-trie plus recent en premier
+        id_rank = {msg_id: i for i, msg_id in enumerate(all_ids)}
+        emails.sort(key=lambda e: id_rank.get(e["id"], len(all_ids)))
 
     return emails
 

@@ -199,13 +199,22 @@ def handle_audit_mails():
     if not service:
         return
     send_telegram("🔍 Audit complet — recuperation des IDs...")
+    try:
+        _run_audit(service)
+    except Exception as e:
+        import traceback
+        send_telegram(f"❌ Erreur audit_mails :\n{str(e)[:300]}")
+        print(traceback.format_exc())
+
+
+def _run_audit(service):
     emails = fetch_all_unread_emails(service)
     if not emails:
         send_telegram("✅ Aucun email non-lu !")
         return
 
     rules = load_rules()
-    send_telegram(f"📊 {len(emails)} emails recuperes. Classification IA en cours...")
+    send_telegram(f"📊 {len(emails)} emails recuperes.")
 
     # Groupement par domaine+mot-cle-sujet : meme expediteur, sujets differents = groupes differents
     groups = {}
@@ -232,6 +241,7 @@ def handle_audit_mails():
         else:
             needs_ai.append((gkey, grp_emails[0]))
 
+    send_telegram(f"🤖 {len(groups)} groupes — {len(group_labels)} regles connues, {len(needs_ai)} a classifier...")
     for i in range(0, len(needs_ai), 20):
         batch_results = audit_classify_batch_with_ai(needs_ai[i:i + 20], rules, ANTHROPIC_API_KEY)
         group_labels.update(batch_results)

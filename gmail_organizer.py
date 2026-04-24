@@ -120,34 +120,35 @@ def fetch_unread_emails(service, max_results=8):
 
 
 def fetch_all_unread_emails(service):
-    """Recupere TOUS les emails non-lus : pagination pour les IDs, batch API pour les metadonnees."""
-    try:
-        # Phase 1 : recuperation de tous les IDs (rapide, pagination)
-        all_ids = []
-        params = {"userId": "me", "q": "is:unread in:inbox", "maxResults": 500}
-        result = service.users().messages().list(**params).execute()
+    """Recupere TOUS les emails non-lus : IDs en pagination, metadonnees en batch avec fallback individuel."""
+    # Phase 1 : tous les IDs
+    all_ids = []
+    params = {"userId": "me", "q": "is:unread in:inbox", "maxResults": 500}
+    result = service.users().messages().list(**params).execute()
+    all_ids.extend(m["id"] for m in result.get("messages", []))
+    while "nextPageToken" in result:
+        result = service.users().messages().list(
+            **params, pageToken=result["nextPageToken"]
+        ).execute()
         all_ids.extend(m["id"] for m in result.get("messages", []))
-        while "nextPageToken" in result:
-            result = service.users().messages().list(
-                **params, pageToken=result["nextPageToken"]
-            ).execute()
-            all_ids.extend(m["id"] for m in result.get("messages", []))
-        print(f"Total non-lus trouves: {len(all_ids)}")
+    print(f"Total non-lus trouves: {len(all_ids)}")
 
-        # Phase 2 : metadonnees par batch de 100 (un seul appel HTTP par batch)
-        emails = []
+    # Phase 2 : metadonnees — batch API, fallback appels individuels
+    emails = []
 
-        def _cb(request_id, response, exception):
-            if exception or not response:
-                return
-            hdrs = {h["name"]: h["value"] for h in response["payload"]["headers"]}
-            emails.append({
-                "id": response["id"],
-                "subject": hdrs.get("Subject", "(sans objet)")[:100],
-                "sender": hdrs.get("From", "inconnu")[:80],
-                "snippet": response.get("snippet", "")[:150],
-            })
+    def _cb(request_id, response, exception):
+        if exception or not response:
+            return
+        hdrs = {h["name"]: h["value"] for h in response["payload"]["headers"]}
+        emails.append({
+            "id": response["id"],
+            "subject": hdrs.get("Subject", "(sans objet)")[:100],
+            "sender": hdrs.get("From", "inconnu")[:80],
+            "snippet": response.get("snippet", "")[:150],
+        })
 
+    batch_failed = False
+    try:
         for i in range(0, len(all_ids), 100):
             batch = service.new_batch_http_request(callback=_cb)
             for msg_id in all_ids[i:i + 100]:
@@ -156,11 +157,19 @@ def fetch_all_unread_emails(service):
                     metadataHeaders=["Subject", "From"]
                 ))
             batch.execute()
-
-        return emails
     except Exception as e:
-        print("Erreur fetch all unread: " + str(e))
-        return []
+        print(f"Batch API indisponible ({e}), fallback appels individuels")
+        batch_failed = True
+
+    if batch_failed:
+        emails = []
+        for msg_id in all_ids:
+            try:
+                emails.append(_get_email_meta(service, msg_id))
+            except Exception:
+                pass
+
+    return emails
 
 
 def apply_labels_batch(service, label_to_ids):

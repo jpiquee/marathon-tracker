@@ -141,7 +141,7 @@ def fetch_unread_emails(service, max_results=8):
 def list_all_unread_ids(service):
     """Liste tous les IDs non-lus eligibles (hors starred/importants/perso). Plus recent en premier."""
     all_ids = []
-    params = {"userId": "me", "q": "is:unread in:inbox -is:starred -is:important -category:personal", "maxResults": 500}
+    params = {"userId": "me", "q": "is:unread in:inbox -is:starred", "maxResults": 500}
     result = service.users().messages().list(**params).execute()
     all_ids.extend(m["id"] for m in result.get("messages", []))
     while "nextPageToken" in result:

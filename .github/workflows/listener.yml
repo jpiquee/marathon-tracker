@@ -35,6 +35,7 @@ jobs:
             last_update_id.txt
             pending_emails.json
             token.json
+            audit_cursor.json
           key: listener-state-${{ github.run_id }}
           restore-keys: |
             listener-state-
@@ -57,4 +58,5 @@ jobs:
             last_update_id.txt
             pending_emails.json
             token.json
+            audit_cursor.json
           key: listener-state-${{ github.run_id }}

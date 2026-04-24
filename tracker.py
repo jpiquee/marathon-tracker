@@ -15,6 +15,8 @@ try:
     from gmail_organizer import (
         get_gmail_service, load_rules, save_rules, commit_rules_to_github,
         load_pending, save_pending, fetch_unread_emails, fetch_all_unread_emails,
+        list_all_unread_ids, fetch_emails_metadata_batch,
+        load_audit_cursor, save_audit_cursor, delete_audit_cursor,
         apply_rules_to_unread, suggest_label, classify_with_ai, is_likely_personal,
         audit_classify_with_ai, audit_classify_batch_with_ai,
         apply_label_to_email, apply_labels_batch, learn_rule, subject_key,
@@ -194,11 +196,13 @@ def handle_ranger_mails():
     save_pending(pending)
 
 
+AUDIT_CHUNK = 2000
+
+
 def handle_audit_mails():
     service = _gmail_check()
     if not service:
         return
-    send_telegram("🔍 Audit complet — recuperation des IDs...")
     try:
         _run_audit(service)
     except Exception as e:
@@ -208,15 +212,29 @@ def handle_audit_mails():
 
 
 def _run_audit(service):
-    emails = fetch_all_unread_emails(service)
+    cursor = load_audit_cursor()
+
+    if cursor is None:
+        send_telegram("🔍 Recuperation de tous les IDs non-lus...")
+        all_ids = list_all_unread_ids(service)
+        if not all_ids:
+            send_telegram("✅ Aucun email non-lu eligible !")
+            return
+        cursor = {"remaining": all_ids, "total": len(all_ids), "done": 0}
+        send_telegram(f"📊 {len(all_ids)} emails trouves. Demarrage du 1er lot...")
+    else:
+        pct = int(cursor["done"] / cursor["total"] * 100) if cursor["total"] else 0
+        send_telegram(f"⏩ Reprise audit : {cursor['done']}/{cursor['total']} ({pct}%) deja traites.")
+
+    chunk_ids = cursor["remaining"][:AUDIT_CHUNK]
+    emails = fetch_emails_metadata_batch(service, chunk_ids)
     if not emails:
-        send_telegram("✅ Aucun email non-lu !")
+        send_telegram("⚠️ Impossible de recuperer les metadonnees de ce lot.")
         return
 
     rules = load_rules()
-    send_telegram(f"📊 {len(emails)} emails recuperes.")
 
-    # Groupement par domaine+mot-cle-sujet : meme expediteur, sujets differents = groupes differents
+    # Groupement domaine+mot-cle-sujet
     groups = {}
     personal_count = 0
     for email in emails:
@@ -227,11 +245,8 @@ def _run_audit(service):
         domain = "@" + m.group(1) if m else "inconnu"
         sk = subject_key(email["subject"])
         gkey = f"{domain}|{sk}" if sk else domain
-        if gkey not in groups:
-            groups[gkey] = []
-        groups[gkey].append(email)
+        groups.setdefault(gkey, []).append(email)
 
-    # Regle existante ou batch IA pour les groupes inconnus
     group_labels = {}
     needs_ai = []
     for gkey, grp_emails in groups.items():
@@ -248,7 +263,6 @@ def _run_audit(service):
     for gkey, _ in needs_ai:
         group_labels.setdefault(gkey, None)
 
-    # Collecte des IDs par label + apprentissage des regles
     label_to_ids = {}
     new_rules = {}
     security_count = 0
@@ -269,7 +283,6 @@ def _run_audit(service):
             if k not in old_rules or old_rules[k] != v:
                 new_rules[k] = v
 
-    # Application via batchModify (un appel par label)
     send_telegram(f"📬 Application des labels sur {sum(len(v) for v in label_to_ids.values())} emails...")
     applied = apply_labels_batch(service, label_to_ids)
 
@@ -277,66 +290,65 @@ def _run_audit(service):
         save_rules(rules)
         commit_rules_to_github(rules)
 
-    # ── Message 1 : résumé chiffré ──────────────────────────────────────────
-    total = sum(applied.values())
-    lines = [f"✅ Audit termine : {total}/{len(emails)} emails classes\n"]
+    # Mise a jour du curseur
+    cursor["done"] += len(chunk_ids)
+    cursor["remaining"] = cursor["remaining"][AUDIT_CHUNK:]
+    is_complete = len(cursor["remaining"]) == 0
+    if is_complete:
+        delete_audit_cursor()
+    else:
+        save_audit_cursor(cursor)
 
-    # Stats par label sur 2 colonnes
+    # Résumé du lot
+    total_classified = sum(applied.values())
+    pct = int(cursor["done"] / cursor["total"] * 100) if cursor["total"] else 100
+    header = "✅ AUDIT TERMINE" if is_complete else f"📦 Lot {cursor['done']}/{cursor['total']} ({pct}%)"
+    lines = [f"{header} — {total_classified}/{len(emails)} classes\n"]
     ordered = [l for l in LABELS_DEFAULT if l in applied]
     pairs = [(ordered[i], ordered[i+1] if i+1 < len(ordered) else None) for i in range(0, len(ordered), 2)]
     for a, b in pairs:
-        left = f"{a}: {applied[a]}"
-        right = f"{b}: {applied[b]}" if b else ""
-        lines.append(f"  {left:<22}{right}")
-
+        lines.append(f"  {f'{a}: {applied[a]}':<22}{f'{b}: {applied[b]}' if b else ''}")
     footer = []
-    if security_count:
-        footer.append(f"🔒 {security_count} securite")
-    if garder_count:
-        footer.append(f"👤 {garder_count} personnels")
-    if new_rules:
-        footer.append(f"★ {len(new_rules)} nouvelles regles")
+    if security_count: footer.append(f"🔒 {security_count} securite")
+    if garder_count: footer.append(f"👤 {garder_count} personnels")
+    if new_rules: footer.append(f"★ {len(new_rules)} regles")
     if footer:
         lines.append("\n" + "  ".join(footer))
-
+    if not is_complete:
+        remaining_count = len(cursor["remaining"])
+        lines.append(f"\n⏭ {remaining_count} emails restants — reprise automatique au prochain cycle.")
     send_telegram("\n".join(lines))
 
-    # ── Message 2 : tableau des règles par catégorie ─────────────────────────
-    all_rules = load_rules()
-    if not all_rules:
-        send_telegram("📋 Aucune regle enregistree.")
-        return
+    # Tableau des règles : seulement à la fin ou s'il y a des nouvelles règles
+    if is_complete or new_rules:
+        _send_rules_table(load_rules(), new_rules)
 
-    # Groupement : label -> [patterns]
+
+def _send_rules_table(all_rules, new_rules):
+    if not all_rules:
+        return
     by_label = {lbl: [] for lbl in LABELS_DEFAULT}
     for pattern, lbl in sorted(all_rules.items()):
         if lbl in by_label:
             by_label[lbl].append(pattern)
-
     table_lines = [f"📋 REGLES ACTIVES ({len(all_rules)})\n"]
     for lbl in LABELS_DEFAULT:
         patterns = by_label.get(lbl, [])
         if not patterns:
             continue
-        new_in_label = [p for p in patterns if p in new_rules]
+        new_in = [p for p in patterns if p in new_rules]
         header = f"[ {lbl.upper()} — {len(patterns)} regle(s)"
-        if new_in_label:
-            header += f", {len(new_in_label)} nouvelle(s)"
-        header += " ]"
-        table_lines.append(header)
+        if new_in:
+            header += f", {len(new_in)} nouvelle(s)"
+        table_lines.append(header + " ]")
         for p in patterns:
-            mark = " ★" if p in new_rules else ""
-            table_lines.append(f"  {p}{mark}")
+            table_lines.append(f"  {p}{' ★' if p in new_rules else ''}")
         table_lines.append("")
-
     table_msg = "\n".join(table_lines)
-    # Découpe si > 3800 chars (1 coupe par label-block)
     while len(table_msg) > 3800:
-        cut = table_msg.rfind("\n[ ", 0, 3800)
-        if cut == -1:
-            cut = table_msg.rfind("\n", 0, 3800)
+        cut = table_msg.rfind("\n[ ", 0, 3800) or table_msg.rfind("\n", 0, 3800)
         send_telegram(table_msg[:cut])
-        table_msg = table_msg[cut+1:]
+        table_msg = table_msg[cut + 1:]
     send_telegram(table_msg)
 
 
@@ -505,6 +517,18 @@ def handle_reset_callback(callback_query):
 
 def mode_listen(duration_sec=3300):
     print("=== LISTEN " + str(duration_sec) + "s ===")
+    # Auto-reprise si un audit est en cours (curseur persistant)
+    if GMAIL_AVAILABLE:
+        cursor = load_audit_cursor()
+        if cursor:
+            service = get_gmail_service()
+            if service:
+                try:
+                    _run_audit(service)
+                except Exception as e:
+                    import traceback
+                    send_telegram(f"❌ Erreur audit (auto-reprise) :\n{str(e)[:200]}")
+                    print(traceback.format_exc())
     lu = get_file(LAST_UPDATE_FILE)
     last_update_id = int(lu) if lu else 0
     end_time = time.time() + duration_sec

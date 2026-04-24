@@ -6,6 +6,7 @@ import requests
 
 GMAIL_RULES_FILE = "gmail_rules.json"
 PENDING_EMAILS_FILE = "pending_emails.json"
+AUDIT_CURSOR_FILE = "audit_cursor.json"
 
 LABELS_DEFAULT = [
     "Travail", "Personnel", "Newsletter", "Commande",
@@ -81,6 +82,24 @@ def commit_rules_to_github(rules):
     requests.put(api_url, headers=headers, json=body, timeout=15)
 
 
+def load_audit_cursor():
+    try:
+        with open(AUDIT_CURSOR_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def save_audit_cursor(data):
+    with open(AUDIT_CURSOR_FILE, "w") as f:
+        json.dump(data, f)
+
+def delete_audit_cursor():
+    try:
+        os.remove(AUDIT_CURSOR_FILE)
+    except Exception:
+        pass
+
+
 def load_pending():
     try:
         with open(PENDING_EMAILS_FILE) as f:
@@ -119,9 +138,8 @@ def fetch_unread_emails(service, max_results=8):
         return []
 
 
-def fetch_all_unread_emails(service):
-    """Recupere TOUS les emails non-lus : IDs en pagination, metadonnees en batch avec fallback individuel."""
-    # Phase 1 : tous les IDs
+def list_all_unread_ids(service):
+    """Liste tous les IDs non-lus eligibles (hors starred/importants/perso). Plus recent en premier."""
     all_ids = []
     params = {"userId": "me", "q": "is:unread in:inbox -is:starred -is:important -category:personal", "maxResults": 500}
     result = service.users().messages().list(**params).execute()
@@ -131,9 +149,12 @@ def fetch_all_unread_emails(service):
             **params, pageToken=result["nextPageToken"]
         ).execute()
         all_ids.extend(m["id"] for m in result.get("messages", []))
-    print(f"Total non-lus trouves: {len(all_ids)}")
+    print(f"Total IDs non-lus: {len(all_ids)}")
+    return all_ids
 
-    # Phase 2 : metadonnees — batch API, fallback appels individuels
+
+def fetch_emails_metadata_batch(service, ids):
+    """Recupere les metadonnees d'une liste d'IDs. Batch API avec fallback individuel."""
     emails = []
 
     def _cb(request_id, response, exception):
@@ -149,9 +170,9 @@ def fetch_all_unread_emails(service):
 
     batch_failed = False
     try:
-        for i in range(0, len(all_ids), 100):
+        for i in range(0, len(ids), 100):
             batch = service.new_batch_http_request(callback=_cb)
-            for msg_id in all_ids[i:i + 100]:
+            for msg_id in ids[i:i + 100]:
                 batch.add(service.users().messages().get(
                     userId="me", id=msg_id, format="metadata",
                     metadataHeaders=["Subject", "From"]
@@ -163,17 +184,22 @@ def fetch_all_unread_emails(service):
 
     if batch_failed:
         emails = []
-        for msg_id in all_ids:
+        for msg_id in ids:
             try:
                 emails.append(_get_email_meta(service, msg_id))
             except Exception:
                 pass
     else:
-        # La batch API renvoie dans un ordre quelconque : on re-trie plus recent en premier
-        id_rank = {msg_id: i for i, msg_id in enumerate(all_ids)}
-        emails.sort(key=lambda e: id_rank.get(e["id"], len(all_ids)))
+        id_rank = {msg_id: i for i, msg_id in enumerate(ids)}
+        emails.sort(key=lambda e: id_rank.get(e["id"], len(ids)))
 
     return emails
+
+
+def fetch_all_unread_emails(service):
+    """Wrapper pour apply_rules_to_unread : liste + metadonnees en une passe."""
+    ids = list_all_unread_ids(service)
+    return fetch_emails_metadata_batch(service, ids)
 
 
 def apply_labels_batch(service, label_to_ids):

@@ -123,7 +123,7 @@ def fetch_all_unread_emails(service):
     """Recupere TOUS les emails non-lus : IDs en pagination, metadonnees en batch avec fallback individuel."""
     # Phase 1 : tous les IDs
     all_ids = []
-    params = {"userId": "me", "q": "is:unread in:inbox", "maxResults": 500}
+    params = {"userId": "me", "q": "is:unread in:inbox -is:starred -is:important -category:personal", "maxResults": 500}
     result = service.users().messages().list(**params).execute()
     all_ids.extend(m["id"] for m in result.get("messages", []))
     while "nextPageToken" in result:

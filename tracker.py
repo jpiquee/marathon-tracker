@@ -481,7 +481,7 @@ def handle_reset_gmail():
         {"text": "❌ Annuler", "callback_data": "reset_cancel"}
     ]]
     send_telegram_with_buttons(
-        "⚠️ RESET GMAIL\n\nCela va :\n• Retirer tous les labels du bot\n• Remettre tous ces emails en non-lu\n\nConfirmer ?",
+        "⚠️ RESET GMAIL\n\nCela va :\n• Retirer tous les labels\n• Remettre tous les emails en non-lu\n• Effacer toutes les règles apprises\n• Annuler l'audit en cours\n\nConfirmer ?",
         buttons
     )
 
@@ -506,10 +506,12 @@ def handle_reset_callback(callback_query):
         count = reset_gmail_labels(service, on_progress=on_progress)
         if count < 0:
             edit_message_text(chat_id, message_id, "❌ Erreur lors du reset Gmail.")
-        elif count == 0:
-            edit_message_text(chat_id, message_id, "✅ Aucun email à réinitialiser.")
         else:
-            edit_message_text(chat_id, message_id, f"✅ Reset terminé : {count} email(s) remis en non-lu, labels retirés.")
+            save_rules({})
+            commit_rules_to_github({})
+            delete_audit_cursor()
+            msg = "✅ Aucun email à réinitialiser." if count == 0 else f"✅ Reset terminé : {count} email(s) remis en non-lu, labels retirés."
+            edit_message_text(chat_id, message_id, msg + "\nRègles et curseur d'audit effacés.")
     elif data == "reset_cancel":
         answer_callback_query(cq_id, "Annulé")
         edit_message_text(chat_id, message_id, "❌ Reset annulé.")
